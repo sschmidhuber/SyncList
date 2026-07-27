@@ -1,6 +1,7 @@
 module SyncList
 
 using Oxygen
+@oxidize
 using Mustache
 using SQLite
 using TOML
@@ -76,7 +77,7 @@ function load_users()
     end
     try
         data = TOML.parsefile(USERS_FILE)
-        return get(data, "users", Dict{String, Any}())
+        return Base.get(data, "users", Dict{String, Any}())
     catch e
         @error "Error parsing users.toml" exception=e
         return Dict{String, Any}()
@@ -108,7 +109,7 @@ function get_authenticated_user(req::HTTP.Request)
     if token === nothing
         return nothing
     end
-    return get(SESSIONS, token, nothing)
+    return Base.get(SESSIONS, token, nothing)
 end
 
 # Check if user can access list
@@ -198,8 +199,8 @@ end
 
 @post "/login" function(req::HTTP.Request)
     data = formdata(req)
-    username = strip(get(data, "username", ""))
-    password = get(data, "password", "")
+    username = strip(Base.get(data, "username", ""))
+    password = Base.get(data, "password", "")
     
     users = load_users()
     if haskey(users, username) && users[username] == password
@@ -262,9 +263,9 @@ end
     end
     
     data = formdata(req)
-    name = strip(get(data, "name", ""))
+    name = strip(Base.get(data, "name", ""))
     # Default is private (0), shared is (1)
-    is_shared = get(data, "is_shared", "0") == "1" ? 1 : 0
+    is_shared = Base.get(data, "is_shared", "0") == "1" ? 1 : 0
     
     if !isempty(name)
         db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", (name, username, is_shared))
@@ -285,7 +286,7 @@ end
     end
     
     data = formdata(req)
-    name = strip(get(data, "name", ""))
+    name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("UPDATE lists SET name = ? WHERE id = ?;", (name, list_id))
     end
@@ -320,7 +321,7 @@ end
     end
     
     data = formdata(req)
-    name = strip(get(data, "name", ""))
+    name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("INSERT INTO items (list_id, name, is_done) VALUES (?, ?, 0);", (list_id, name))
     end
@@ -371,7 +372,7 @@ end
     end
     
     data = formdata(req)
-    name = strip(get(data, "name", ""))
+    name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("UPDATE items SET name = ? WHERE id = ?;", (name, it_id))
     end

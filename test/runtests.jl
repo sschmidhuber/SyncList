@@ -53,3 +53,16 @@ include("../src/SyncList.jl")
     @test priv_list["items"][2]["name"] == "Buy Eggs"
     @test priv_list["items"][2]["is_done"] == true
 end
+
+@testset "Server Restart Route Persistence" begin
+    # Simulate stopping the server (which internally calls terminate() and resetstate())
+    # Calling the methods on SyncList directly uses the module-local CONTEXT
+    SyncList.terminate()
+    SyncList.resetstate()
+
+    # Verify if routes are still matched
+    # Since we are using @oxidize, our routes are safe in the module-level CONTEXT of SyncList, and will return the expected 303.
+    req = SyncList.HTTP.Request("GET", "/")
+    res = SyncList.internalrequest(req)
+    @test res.status == 303
+end
