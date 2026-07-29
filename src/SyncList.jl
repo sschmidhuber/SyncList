@@ -38,6 +38,7 @@ const DB_CONN = let
         name TEXT NOT NULL,
         is_done INTEGER DEFAULT 0,
         checked_at TEXT,
+        position INTEGER DEFAULT 0,
         FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE
     );
     """)
@@ -51,6 +52,12 @@ const DB_CONN = let
 
     try
         SQLite.execute(db, "ALTER TABLE items ADD COLUMN checked_at TEXT;")
+    catch
+        # Column already exists
+    end
+
+    try
+        SQLite.execute(db, "ALTER TABLE items ADD COLUMN position INTEGER DEFAULT 0;")
     catch
         # Column already exists
     end
@@ -195,7 +202,7 @@ function get_lists_for_user(username::String)
     
     list_ids = [l["id"] for l in lists]
     placeholders = join(repeat(["?"], length(list_ids)), ", ")
-    items = db_query("SELECT * FROM items WHERE list_id IN ($placeholders) ORDER BY id ASC", Tuple(list_ids))
+    items = db_query("SELECT * FROM items WHERE list_id IN ($placeholders) ORDER BY position ASC, id ASC", Tuple(list_ids))
     
     list_map = Dict{Int, Dict{String, Any}}()
     for l in lists
@@ -505,11 +512,37 @@ end
     data = formdata(req)
     name = strip(Base.get(data, "name", ""))
     if !isempty(name)
-        db_execute("INSERT INTO items (list_id, name, is_done) VALUES (?, ?, 0);", (list_id, name))
+        r = db_query("SELECT MAX(position) as m FROM items WHERE list_id = ?;", (list_id,))
+        max_pos = isempty(r) || r[1]["m"] === nothing ? 0 : r[1]["m"]
+        db_execute("INSERT INTO items (list_id, name, is_done, position) VALUES (?, ?, 0, ?);", (list_id, name, max_pos + 1))
         notify_sse_clients()
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
+end
+
+@post "/lists/{id}/reorder" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    list_id = parse(Int, id)
+    if !has_list_access(username, list_id)
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    data = formdata(req)
+    ids_str = Base.get(data, "ids", "")
+    if !isempty(ids_str)
+        id_list = [parse(Int, s) for s in split(ids_str, ",")]
+        for (pos, item_id) in enumerate(id_list)
+            db_execute("UPDATE items SET position = ? WHERE id = ? AND list_id = ?;", (pos, item_id, list_id))
+        end
+        notify_sse_clients()
+    end
+    
+    return HTTP.Response(200, "OK")
 end
 
 @post "/items/{item_id}/toggle" function(req::HTTP.Request, item_id::String)

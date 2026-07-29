@@ -172,3 +172,54 @@ end
     @test res.status == 200
     @test any(h -> h.first == "Set-Cookie" && occursin("session_id=testtoken12345", h.second) && occursin("Max-Age=2592000", h.second), res.headers)
 end
+
+@testset "Items Reordering and Sorting Persistence" begin
+    # Reset tables
+    SyncList.db_execute("DELETE FROM items;")
+    SyncList.db_execute("DELETE FROM lists;")
+    SyncList.db_execute("DELETE FROM sessions;")
+
+    # Setup session
+    token = "test_reorder_token"
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
+
+    # Create a list
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Reorder List", "stefan", 0))
+    lists = SyncList.get_lists_for_user("stefan")
+    list_id = lists[1]["id"]
+
+    # Insert items using standard insert route (this will set positions)
+    req1 = SyncList.HTTP.Request("POST", "/lists/$(list_id)/items", ["Cookie" => "session_id=$(token)"], "name=Item A")
+    SyncList.internalrequest(req1)
+    req2 = SyncList.HTTP.Request("POST", "/lists/$(list_id)/items", ["Cookie" => "session_id=$(token)"], "name=Item B")
+    SyncList.internalrequest(req2)
+    req3 = SyncList.HTTP.Request("POST", "/lists/$(list_id)/items", ["Cookie" => "session_id=$(token)"], "name=Item C")
+    SyncList.internalrequest(req3)
+
+    # Verify initial positions are A, B, C
+    lists = SyncList.get_lists_for_user("stefan")
+    items = lists[1]["items"]
+    @test length(items) == 3
+    @test items[1]["name"] == "Item A"
+    @test items[2]["name"] == "Item B"
+    @test items[3]["name"] == "Item C"
+
+    # Get IDs
+    id_a = items[1]["id"]
+    id_b = items[2]["id"]
+    id_c = items[3]["id"]
+
+    # Perform a reorder request to change order to B, C, A
+    reorder_body = "ids=$(id_b),$(id_c),$(id_a)"
+    reorder_req = SyncList.HTTP.Request("POST", "/lists/$(list_id)/reorder", ["Cookie" => "session_id=$(token)", "Content-Type" => "application/x-www-form-urlencoded"], reorder_body)
+    res = SyncList.internalrequest(reorder_req)
+    @test res.status == 200
+
+    # Retrieve items and check new order
+    lists = SyncList.get_lists_for_user("stefan")
+    items = lists[1]["items"]
+    @test length(items) == 3
+    @test items[1]["name"] == "Item B"
+    @test items[2]["name"] == "Item C"
+    @test items[3]["name"] == "Item A"
+end

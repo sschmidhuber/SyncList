@@ -11,6 +11,8 @@
     <!-- HTMX -->
     <script src="https://unpkg.com/htmx.org@1.9.10"></script>
     <script src="https://unpkg.com/htmx.org@1.9.10/dist/ext/sse.js"></script>
+    <!-- SortableJS -->
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
     <style>
         body {
             background-color: #f4f6f9;
@@ -94,16 +96,19 @@
                     </form>
 
                     <!-- Items List -->
-                    <ul class="list-group list-group-flush border-top">
+                    <ul class="sortable-list list-group list-group-flush border-top" data-list-id="{{id}}">
                         {{#items}}
-                        <li class="list-group-item d-flex justify-content-between align-items-center px-0 py-2 border-0 border-bottom">
-                            <div class="form-check mb-0">
-                                <input class="form-check-input me-2" type="checkbox" id="item-chk-{{id}}" 
-                                       hx-post="/items/{{id}}/toggle" hx-target="#lists-container" hx-swap="innerHTML"
-                                       {{#is_done}}checked{{/is_done}}>
-                                <label class="form-check-label {{#is_done}}item-done{{/is_done}}" for="item-chk-{{id}}">
-                                    {{name}}
-                                </label>
+                        <li class="sortable-item list-group-item d-flex justify-content-between align-items-center px-0 py-2 border-0 border-bottom" data-item-id="{{id}}">
+                            <div class="d-flex align-items-center">
+                                <i class="bi bi-grip-vertical text-muted drag-handle me-1" style="cursor: grab; font-size: 1.1rem;"></i>
+                                <div class="form-check mb-0">
+                                    <input class="form-check-input me-2" type="checkbox" id="item-chk-{{id}}" 
+                                           hx-post="/items/{{id}}/toggle" hx-target="#lists-container" hx-swap="innerHTML"
+                                           {{#is_done}}checked{{/is_done}}>
+                                    <label class="form-check-label {{#is_done}}item-done{{/is_done}}" for="item-chk-{{id}}">
+                                        {{name}}
+                                    </label>
+                                </div>
                             </div>
                             <div class="btn-group">
                                 <button hx-get="/items/{{id}}/edit" hx-target="#modals-holder" class="btn btn-sm btn-link text-secondary p-1"><i class="bi bi-pencil-square"></i></button>
@@ -189,8 +194,43 @@
             });
         }
 
-        document.addEventListener('DOMContentLoaded', initTooltips);
-        document.body.addEventListener('htmx:afterSwap', initTooltips);
+        function initSortable() {
+            document.querySelectorAll('.sortable-list').forEach(function(el) {
+                if (el.sortableInstance) {
+                    el.sortableInstance.destroy();
+                }
+                el.sortableInstance = new Sortable(el, {
+                    animation: 150,
+                    handle: '.drag-handle',
+                    ghostClass: 'bg-light',
+                    onEnd: function (evt) {
+                        const listId = el.getAttribute('data-list-id');
+                        const itemIds = Array.from(el.querySelectorAll('.sortable-item')).map(item => item.getAttribute('data-item-id')).join(',');
+                        
+                        const params = new URLSearchParams();
+                        params.append('ids', itemIds);
+                        
+                        fetch('/lists/' + listId + '/reorder', {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/x-www-form-urlencoded',
+                            },
+                            body: params.toString()
+                        });
+                    }
+                });
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            initTooltips();
+            initSortable();
+        });
+        
+        document.body.addEventListener('htmx:afterSwap', function() {
+            initTooltips();
+            initSortable();
+        });
 
         // Clear and focus "add new item..." textbox after successfully adding an item
         document.body.addEventListener('htmx:afterRequest', function(evt) {
