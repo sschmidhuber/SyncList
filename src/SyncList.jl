@@ -25,7 +25,8 @@ const DB_CONN = let
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         owner TEXT NOT NULL,
-        is_shared INTEGER DEFAULT 0
+        is_shared INTEGER DEFAULT 0,
+        show_hidden INTEGER DEFAULT 0
     );
     """)
     
@@ -36,9 +37,23 @@ const DB_CONN = let
         list_id INTEGER NOT NULL,
         name TEXT NOT NULL,
         is_done INTEGER DEFAULT 0,
+        checked_at TEXT,
         FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE
     );
     """)
+
+    # Migrations for existing databases
+    try
+        SQLite.execute(db, "ALTER TABLE lists ADD COLUMN show_hidden INTEGER DEFAULT 0;")
+    catch
+        # Column already exists or table is not created yet
+    end
+
+    try
+        SQLite.execute(db, "ALTER TABLE items ADD COLUMN checked_at TEXT;")
+    catch
+        # Column already exists
+    end
 
     # Create sessions table
     SQLite.execute(db, """
@@ -155,6 +170,7 @@ function get_lists_for_user(username::String)
     list_map = Dict{Int, Dict{String, Any}}()
     for l in lists
         l["is_shared"] = l["is_shared"] == 1
+        l["show_hidden"] = l["show_hidden"] == 1
         l["items"] = []
         list_map[l["id"]] = l
     end
@@ -163,7 +179,28 @@ function get_lists_for_user(username::String)
         item["is_done"] = item["is_done"] == 1
         list_id = item["list_id"]
         if haskey(list_map, list_id)
-            push!(list_map[list_id]["items"], item)
+            list_obj = list_map[list_id]
+            
+            is_item_hidden = false
+            if item["is_done"] && item["checked_at"] !== nothing
+                try
+                    checked_at = DateTime(item["checked_at"], "yyyy-mm-dd HH:MM:SS")
+                    if Dates.now(Dates.UTC) - checked_at >= Dates.Hour(24)
+                        is_item_hidden = true
+                    end
+                catch e
+                    @error "Error parsing checked_at" exception=e
+                end
+            end
+            
+            item["is_hidden"] = is_item_hidden
+            
+            # If item is hidden and show_hidden is false, do not include it in the displayed items
+            if is_item_hidden && !list_obj["show_hidden"]
+                continue
+            end
+            
+            push!(list_obj["items"], item)
         end
     end
     
@@ -427,7 +464,29 @@ end
     end
     
     new_done = item["is_done"] == 1 ? 0 : 1
-    db_execute("UPDATE items SET is_done = ? WHERE id = ?;", (new_done, it_id))
+    checked_at = new_done == 1 ? Dates.format(Dates.now(Dates.UTC), "yyyy-mm-dd HH:MM:SS") : nothing
+    db_execute("UPDATE items SET is_done = ?, checked_at = ? WHERE id = ?;", (new_done, checked_at, it_id))
+    
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
+end
+
+@post "/lists/{id}/toggle_hidden" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    list_id = parse(Int, id)
+    if !has_list_access(username, list_id)
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    rows = db_query("SELECT show_hidden FROM lists WHERE id = ?;", (list_id,))
+    if isempty(rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    new_show = rows[1]["show_hidden"] == 1 ? 0 : 1
+    db_execute("UPDATE lists SET show_hidden = ? WHERE id = ?;", (new_show, list_id))
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end

@@ -54,6 +54,89 @@ include("../src/SyncList.jl")
     @test priv_list["items"][2]["is_done"] == true
 end
 
+@testset "Checked Items Auto-Hiding and Show Hidden Option" begin
+    # Clean tables
+    SyncList.db_execute("DELETE FROM items;")
+    SyncList.db_execute("DELETE FROM lists;")
+
+    # 1. Create a list
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared, show_hidden) VALUES (?, ?, ?, ?);", ("My List", "stefan", 0, 0))
+    lists = SyncList.get_lists_for_user("stefan")
+    @test length(lists) == 1
+    list_id = lists[1]["id"]
+    @test lists[1]["show_hidden"] == false
+
+    # 2. Insert items
+    # - "Active Item" (not done)
+    # - "Recently Checked" (done, checked 1 hour ago)
+    # - "Old Checked" (done, checked 25 hours ago)
+    # - "Old Checked but Visible" (done, checked 30 hours ago, but list has show_hidden=true)
+    now_utc = SyncList.Dates.now(SyncList.Dates.UTC)
+    recent_checked_str = SyncList.Dates.format(now_utc - SyncList.Dates.Hour(1), "yyyy-mm-dd HH:MM:SS")
+    old_checked_str = SyncList.Dates.format(now_utc - SyncList.Dates.Hour(25), "yyyy-mm-dd HH:MM:SS")
+
+    SyncList.db_execute("INSERT INTO items (list_id, name, is_done, checked_at) VALUES (?, ?, ?, ?);", (list_id, "Active Item", 0, nothing))
+    SyncList.db_execute("INSERT INTO items (list_id, name, is_done, checked_at) VALUES (?, ?, ?, ?);", (list_id, "Recently Checked", 1, recent_checked_str))
+    SyncList.db_execute("INSERT INTO items (list_id, name, is_done, checked_at) VALUES (?, ?, ?, ?);", (list_id, "Old Checked", 1, old_checked_str))
+
+    # Retrieve with show_hidden = false (default)
+    lists = SyncList.get_lists_for_user("stefan")
+    items = lists[1]["items"]
+    # Only "Active Item" and "Recently Checked" should be returned; "Old Checked" is hidden
+    @test length(items) == 2
+    @test any(i -> i["name"] == "Active Item", items)
+    @test any(i -> i["name"] == "Recently Checked", items)
+    @test !any(i -> i["name"] == "Old Checked", items)
+
+    # 3. Toggle list's show_hidden to true
+    SyncList.db_execute("UPDATE lists SET show_hidden = 1 WHERE id = ?;", (list_id,))
+    lists = SyncList.get_lists_for_user("stefan")
+    @test lists[1]["show_hidden"] == true
+    items = lists[1]["items"]
+    # Now all three items should be visible
+    @test length(items) == 3
+    @test any(i -> i["name"] == "Active Item", items)
+    @test any(i -> i["name"] == "Recently Checked", items)
+    @test any(i -> i["name"] == "Old Checked", items)
+
+    # 4. Toggle routes testing
+    # Simulate a toggle_hidden request
+    req = SyncList.HTTP.Request("POST", "/lists/$(list_id)/toggle_hidden")
+    # We need to mock session or authenticate. Let's insert a session.
+    token = "test_hidden_token"
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
+    req.headers = ["Cookie" => "session_id=$(token)"]
+    
+    res = SyncList.internalrequest(req)
+    @test res.status == 200
+    
+    # After toggling, it should be back to show_hidden = false (0)
+    db_list = SyncList.db_query("SELECT show_hidden FROM lists WHERE id = ?;", (list_id,))
+    @test db_list[1]["show_hidden"] == 0
+
+    # 5. Toggle item check testing
+    # Insert new item, check toggling updates checked_at
+    SyncList.db_execute("INSERT INTO items (list_id, name, is_done, checked_at) VALUES (?, ?, 0, ?);", (list_id, "Toggle Item", nothing))
+    it_rows = SyncList.db_query("SELECT id FROM items WHERE name = 'Toggle Item';")
+    it_id = it_rows[1]["id"]
+
+    # Toggle to done (checked)
+    toggle_req = SyncList.HTTP.Request("POST", "/items/$(it_id)/toggle", ["Cookie" => "session_id=$(token)"])
+    res = SyncList.internalrequest(toggle_req)
+    @test res.status == 200
+
+    item_db = SyncList.db_query("SELECT is_done, checked_at FROM items WHERE id = ?;", (it_id,))[1]
+    @test item_db["is_done"] == 1
+    @test item_db["checked_at"] !== nothing
+
+    # Toggle back to active (unchecked)
+    res = SyncList.internalrequest(toggle_req)
+    @test res.status == 200
+    item_db2 = SyncList.db_query("SELECT is_done, checked_at FROM items WHERE id = ?;", (it_id,))[1]
+    @test item_db2["is_done"] == 0
+    @test item_db2["checked_at"] === nothing
+end
+
 @testset "Server Restart Route Persistence" begin
     # Simulate stopping the server (which internally calls terminate() and resetstate())
     # Calling the methods on SyncList directly uses the module-local CONTEXT
