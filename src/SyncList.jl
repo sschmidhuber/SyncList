@@ -92,6 +92,36 @@ end
 # session_token => username
 const SESSIONS = Dict{String, String}()
 
+# SSE Client Store
+const SSE_CLIENTS = Set{Channel{String}}()
+const SSE_LOCK = ReentrantLock()
+
+function register_sse_client(chan::Channel{String})
+    lock(SSE_LOCK) do
+        push!(SSE_CLIENTS, chan)
+    end
+end
+
+function unregister_sse_client(chan::Channel{String})
+    lock(SSE_LOCK) do
+        delete!(SSE_CLIENTS, chan)
+    end
+end
+
+function notify_sse_clients()
+    lock(SSE_LOCK) do
+        for chan in SSE_CLIENTS
+            try
+                if isopen(chan)
+                    put!(chan, "event: list-updated\ndata: {}\n\n")
+                end
+            catch e
+                # Channel might be closed or broken, handle gracefully
+            end
+        end
+    end
+end
+
 # Load Users from TOML
 const USERS_FILE = joinpath(PROJECT_ROOT, "users.toml")
 function load_users()
@@ -321,6 +351,40 @@ end
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
+@get "/lists/events" function(stream::HTTP.Stream)
+    req = stream.message
+    username = get_authenticated_user(req)
+    if username === nothing
+        HTTP.setstatus(stream, 401)
+        HTTP.setheader(stream, "Content-Type" => "text/html")
+        HTTP.startwrite(stream)
+        write(stream, "Unauthorized")
+        return
+    end
+    
+    HTTP.setstatus(stream, 200)
+    HTTP.setheader(stream, "Content-Type" => "text/event-stream")
+    HTTP.setheader(stream, "Cache-Control" => "no-cache")
+    HTTP.setheader(stream, "Connection" => "keep-alive")
+    HTTP.startwrite(stream)
+    
+    client_chan = Channel{String}(32)
+    register_sse_client(client_chan)
+    try
+        write(stream, ": ok\n\n")
+        while isopen(stream) && isopen(client_chan)
+            msg = take!(client_chan)
+            if isopen(stream)
+                write(stream, msg)
+            end
+        end
+    catch e
+        # Client disconnected
+    finally
+        unregister_sse_client(client_chan)
+    end
+end
+
 @post "/lists" function(req::HTTP.Request)
     username = get_authenticated_user(req)
     if username === nothing
@@ -334,6 +398,7 @@ end
     
     if !isempty(name)
         db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", (name, username, is_shared))
+        notify_sse_clients()
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
@@ -379,6 +444,7 @@ end
     name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("UPDATE lists SET name = ? WHERE id = ?;", (name, list_id))
+        notify_sse_clients()
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
@@ -421,6 +487,7 @@ end
     end
     
     db_execute("DELETE FROM lists WHERE id = ?;", (list_id,))
+    notify_sse_clients()
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
 
@@ -439,6 +506,7 @@ end
     name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("INSERT INTO items (list_id, name, is_done) VALUES (?, ?, 0);", (list_id, name))
+        notify_sse_clients()
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
@@ -466,6 +534,7 @@ end
     new_done = item["is_done"] == 1 ? 0 : 1
     checked_at = new_done == 1 ? Dates.format(Dates.now(Dates.UTC), "yyyy-mm-dd HH:MM:SS") : nothing
     db_execute("UPDATE items SET is_done = ?, checked_at = ? WHERE id = ?;", (new_done, checked_at, it_id))
+    notify_sse_clients()
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
@@ -487,6 +556,7 @@ end
     end
     new_show = rows[1]["show_hidden"] == 1 ? 0 : 1
     db_execute("UPDATE lists SET show_hidden = ? WHERE id = ?;", (new_show, list_id))
+    notify_sse_clients()
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
@@ -539,6 +609,7 @@ end
     name = strip(Base.get(data, "name", ""))
     if !isempty(name)
         db_execute("UPDATE items SET name = ? WHERE id = ?;", (name, it_id))
+        notify_sse_clients()
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
@@ -562,6 +633,7 @@ end
     end
     
     db_execute("DELETE FROM items WHERE id = ?;", (it_id,))
+    notify_sse_clients()
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
 
