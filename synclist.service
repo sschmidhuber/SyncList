@@ -1,0 +1,13 @@
+[Unit]
+Description=SyncList Collaborative List Service
+After=network.target
+
+[Service]
+Type=simple
+User=stefan
+ExecStart=/home/stefan/.julia/bin/synclist --host 0.0.0.0 --port 8080 --db /home/stefan/Development/Julia/SyncList/synclist.db --users /home/stefan/Development/Julia/SyncList/users.toml
+Restart=on-failure
+WorkingDirectory=/home/stefan/Development/Julia/SyncList
+
+[Install]
+WantedBy=multi-user.target

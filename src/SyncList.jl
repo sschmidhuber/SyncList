@@ -14,86 +14,108 @@ import HTTP
 const DB_LOCK = ReentrantLock()
 const PROJECT_ROOT = dirname(@__DIR__)
 
-const DB_CONN = let
-    db = SQLite.DB(joinpath(PROJECT_ROOT, "synclist.db"))
-    # Enable foreign keys for CASCADE DELETE
-    SQLite.execute(db, "PRAGMA foreign_keys = ON;")
-    
-    # Create lists table
-    SQLite.execute(db, """
-    CREATE TABLE IF NOT EXISTS lists (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        owner TEXT NOT NULL,
-        is_shared INTEGER DEFAULT 0,
-        show_hidden INTEGER DEFAULT 0
-    );
-    """)
-    
-    # Create items table
-    SQLite.execute(db, """
-    CREATE TABLE IF NOT EXISTS items (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        list_id INTEGER NOT NULL,
-        name TEXT NOT NULL,
-        is_done INTEGER DEFAULT 0,
-        checked_at TEXT,
-        position INTEGER DEFAULT 0,
-        FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE
-    );
-    """)
+const DB_CONN = Ref{SQLite.DB}()
+const USERS_FILE = Ref{String}("")
 
-    # Migrations for existing databases
-    try
-        SQLite.execute(db, "ALTER TABLE lists ADD COLUMN show_hidden INTEGER DEFAULT 0;")
-    catch
-        # Column already exists or table is not created yet
+function init_db_and_users(db_path=nothing, users_path=nothing)
+    if db_path === nothing
+        db_path = Base.get(ENV, "SYNCLIST_DB", joinpath(PROJECT_ROOT, "synclist.db"))
+    end
+    if users_path === nothing
+        users_path = Base.get(ENV, "SYNCLIST_USERS", joinpath(PROJECT_ROOT, "users.toml"))
     end
 
-    try
-        SQLite.execute(db, "ALTER TABLE items ADD COLUMN checked_at TEXT;")
-    catch
-        # Column already exists
-    end
+    USERS_FILE[] = users_path
 
-    try
-        SQLite.execute(db, "ALTER TABLE items ADD COLUMN position INTEGER DEFAULT 0;")
-    catch
-        # Column already exists
-    end
-
-    # Create sessions table
-    SQLite.execute(db, """
-    CREATE TABLE IF NOT EXISTS sessions (
-        token TEXT PRIMARY KEY,
-        username TEXT NOT NULL
-    );
-    """)
-
-    # Create autosuggestions table
-    SQLite.execute(db, """
-    CREATE TABLE IF NOT EXISTS autosuggestions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL UNIQUE COLLATE NOCASE
-    );
-    """)
-
-    # Seed default German groceries if empty
-    r = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM autosuggestions;") |> first
-    if r.count == 0
-        default_groceries = ["Butter", "Milch", "Kaffee", "Brot", "Eier", "Käse", "Äpfel", "Bananen", "Kartoffeln", "Zwiebeln", "Nudeln", "Reis", "Zucker", "Salz", "Wasser", "Bier", "Tomaten", "Joghurt", "Schokolade", "Fleisch"]
-        for item in default_groceries
-            SQLite.DBInterface.execute(db, "INSERT INTO autosuggestions (name) VALUES (?);", (item,))
+    lock(DB_LOCK) do
+        # If DB connection is already open, close it first
+        if isassigned(DB_CONN)
+            try
+                SQLite.close(DB_CONN[])
+            catch
+            end
         end
-    end
 
-    db
+        db = SQLite.DB(db_path)
+        # Enable foreign keys for CASCADE DELETE
+        SQLite.execute(db, "PRAGMA foreign_keys = ON;")
+        
+        # Create lists table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS lists (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            owner TEXT NOT NULL,
+            is_shared INTEGER DEFAULT 0,
+            show_hidden INTEGER DEFAULT 0
+        );
+        """)
+        
+        # Create items table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            list_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            is_done INTEGER DEFAULT 0,
+            checked_at TEXT,
+            position INTEGER DEFAULT 0,
+            FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE
+        );
+        """)
+
+        # Migrations for existing databases
+        try
+            SQLite.execute(db, "ALTER TABLE lists ADD COLUMN show_hidden INTEGER DEFAULT 0;")
+        catch
+            # Column already exists or table is not created yet
+        end
+
+        try
+            SQLite.execute(db, "ALTER TABLE items ADD COLUMN checked_at TEXT;")
+        catch
+            # Column already exists
+        end
+
+        try
+            SQLite.execute(db, "ALTER TABLE items ADD COLUMN position INTEGER DEFAULT 0;")
+        catch
+            # Column already exists
+        end
+
+        # Create sessions table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS sessions (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL
+        );
+        """)
+
+        # Create autosuggestions table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS autosuggestions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE COLLATE NOCASE
+        );
+        """)
+
+        # Seed default German groceries if empty
+        r = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM autosuggestions;") |> first
+        if r.count == 0
+            default_groceries = ["Butter", "Milch", "Kaffee", "Brot", "Eier", "Käse", "Äpfel", "Bananen", "Kartoffeln", "Zwiebeln", "Nudeln", "Reis", "Zucker", "Salz", "Wasser", "Bier", "Tomaten", "Joghurt", "Schokolade", "Fleisch"]
+            for item in default_groceries
+                SQLite.DBInterface.execute(db, "INSERT INTO autosuggestions (name) VALUES (?);", (item,))
+            end
+        end
+
+        DB_CONN[] = db
+    end
 end
 
 # Database Query Helpers (returns Dict with String keys for Mustache compatibility)
 function db_query(sql::String, params=())
     lock(DB_LOCK) do
-        cursor = SQLite.DBInterface.execute(DB_CONN, sql, params)
+        cursor = SQLite.DBInterface.execute(DB_CONN[], sql, params)
         rows = Dict{String, Any}[]
         for row in cursor
             d = Dict{String, Any}()
@@ -109,7 +131,7 @@ end
 
 function db_execute(sql::String, params=())
     lock(DB_LOCK) do
-        SQLite.DBInterface.execute(DB_CONN, sql, params)
+        SQLite.DBInterface.execute(DB_CONN[], sql, params)
     end
 end
 
@@ -161,13 +183,12 @@ function close_sse_clients()
 end
 
 # Load Users from TOML
-const USERS_FILE = joinpath(PROJECT_ROOT, "users.toml")
 function load_users()
-    if !isfile(USERS_FILE)
+    if !isfile(USERS_FILE[])
         return Dict{String, Any}()
     end
     try
-        data = TOML.parsefile(USERS_FILE)
+        data = TOML.parsefile(USERS_FILE[])
         return Base.get(data, "users", Dict{String, Any}())
     catch e
         @error "Error parsing users.toml" exception=e
@@ -770,13 +791,87 @@ end
     end
 end
 
-function start_server(port=8080, async=false)
-    serve(host="0.0.0.0", port=port, async=async)
+function start_server(host="0.0.0.0", port=8080, async=false)
+    serve(host=host, port=port, async=async)
 end
 
 function stop_server()
     close_sse_clients()
     terminate()
 end
+
+function __init__()
+    # Initialize DB and Users File with environment defaults or defaults relative to package root
+    if !isassigned(DB_CONN) || USERS_FILE[] == ""
+        init_db_and_users()
+    end
+end
+
+function main(args)
+    port = 8080
+    host = "0.0.0.0"
+    db_path = nothing
+    users_path = nothing
+    
+    i = 1
+    while i <= length(args)
+        arg = args[i]
+        if arg == "-p" || arg == "--port"
+            if i + 1 <= length(args)
+                port = parse(Int, args[i+1])
+                i += 2
+            else
+                println("Error: Missing port value")
+                return 1
+            end
+        elseif arg == "-o" || arg == "--host"
+            if i + 1 <= length(args)
+                host = args[i+1]
+                i += 2
+            else
+                println("Error: Missing host value")
+                return 1
+            end
+        elseif arg == "-d" || arg == "--db"
+            if i + 1 <= length(args)
+                db_path = args[i+1]
+                i += 2
+            else
+                println("Error: Missing database path")
+                return 1
+            end
+        elseif arg == "-u" || arg == "--users"
+            if i + 1 <= length(args)
+                users_path = args[i+1]
+                i += 2
+            else
+                println("Error: Missing users path")
+                return 1
+            end
+        elseif arg == "-h" || arg == "--help"
+            println("SyncList - Collaborative list app")
+            println("Usage: synclist [options]")
+            println("Options:")
+            println("  -p, --port <port>       Port to listen on (default: 8080)")
+            println("  -o, --host <host>       Host to bind to (default: 0.0.0.0)")
+            println("  -d, --db <path>         Path to SQLite database file")
+            println("  -u, --users <path>      Path to users TOML configuration file")
+            println("  -h, --help              Show this help message")
+            return 0
+        else
+            println("Unknown option: ", arg)
+            return 1
+        end
+    end
+    
+    # Initialize DB and Users
+    init_db_and_users(db_path, users_path)
+    
+    println("Starting SyncList server on ", host, ":", port)
+    start_server(host, port, false)
+    return 0
+end
+
+Base.@main
 
 end # module
