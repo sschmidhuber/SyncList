@@ -302,6 +302,31 @@ end
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
 
+@get "/lists/{id}/edit" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    list_id = parse(Int, id)
+    if !has_list_access(username, list_id)
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    rows = db_query("SELECT name FROM lists WHERE id = ?;", (list_id,))
+    if isempty(rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    
+    context = Dict{String, Any}(
+        "id" => list_id,
+        "name" => rows[1]["name"]
+    )
+    template_path = joinpath(PROJECT_ROOT, "templates", "edit_list_modal.mustache")
+    html_content = Mustache.render(read(template_path, String), context)
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+end
+
 @post "/lists/{id}/edit" function(req::HTTP.Request, id::String)
     username = get_authenticated_user(req)
     if username === nothing
@@ -320,6 +345,31 @@ end
     end
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
+end
+
+@get "/lists/{id}/delete" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    list_id = parse(Int, id)
+    if !has_list_access(username, list_id)
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    rows = db_query("SELECT name FROM lists WHERE id = ?;", (list_id,))
+    if isempty(rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    
+    context = Dict{String, Any}(
+        "id" => list_id,
+        "name" => rows[1]["name"]
+    )
+    template_path = joinpath(PROJECT_ROOT, "templates", "delete_list_modal.mustache")
+    html_content = Mustache.render(read(template_path, String), context)
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
 @delete "/lists/{id}" function(req::HTTP.Request, id::String)
@@ -380,6 +430,33 @@ end
     db_execute("UPDATE items SET is_done = ? WHERE id = ?;", (new_done, it_id))
     
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
+end
+
+@get "/items/{item_id}/edit" function(req::HTTP.Request, item_id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    it_id = parse(Int, item_id)
+    rows = db_query("SELECT list_id, name FROM items WHERE id = ?;", (it_id,))
+    if isempty(rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    item = rows[1]
+    list_id = item["list_id"]
+    
+    if !has_list_access(username, list_id)
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    context = Dict{String, Any}(
+        "id" => it_id,
+        "name" => item["name"]
+    )
+    template_path = joinpath(PROJECT_ROOT, "templates", "edit_item_modal.mustache")
+    html_content = Mustache.render(read(template_path, String), context)
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
 @post "/items/{item_id}/edit" function(req::HTTP.Request, item_id::String)
