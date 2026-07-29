@@ -86,7 +86,7 @@
                 
                 <div class="card-body pt-0">
                     <!-- Add Item Form inside list -->
-                    <form hx-post="/lists/{{id}}/items" hx-target="#lists-container" hx-swap="innerHTML" class="mb-3" hx-on::after-request="this.reset()">
+                    <form hx-post="/lists/{{id}}/items" hx-target="#lists-container" hx-swap="innerHTML" class="mb-3">
                         <div class="input-group input-group-sm">
                             <input type="text" class="form-control" id="add-item-{{id}}" name="name" placeholder="Add new item..." required autocomplete="off" hx-preserve>
                             <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg"></i></button>
@@ -191,6 +191,26 @@
 
         document.addEventListener('DOMContentLoaded', initTooltips);
         document.body.addEventListener('htmx:afterSwap', initTooltips);
+
+        // Clear and focus "add new item..." textbox after successfully adding an item
+        document.body.addEventListener('htmx:afterRequest', function(evt) {
+            if (evt.detail.successful) {
+                const path = evt.detail.pathInfo ? evt.detail.pathInfo.requestPath : '';
+                const hxPost = evt.detail.elt ? evt.detail.elt.getAttribute('hx-post') : '';
+                const targetPath = path || hxPost || '';
+                const match = targetPath.match(/\/lists\/(\d+)\/items/);
+                if (match) {
+                    const listId = match[1];
+                    setTimeout(function() {
+                        const input = document.getElementById('add-item-' + listId);
+                        if (input) {
+                            input.value = '';
+                            input.focus();
+                        }
+                    }, 50);
+                }
+            }
+        });
     </script>
 </body>
 </html>
