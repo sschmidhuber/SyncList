@@ -35,6 +35,7 @@
             <span class="navbar-brand mb-0 h1 fw-bold"><i class="bi bi-card-checklist me-2"></i>SyncList</span>
             <div class="d-flex align-items-center">
                 <span class="text-white me-3 d-none d-sm-inline">Logged in as <strong>{{username}}</strong></span>
+                <a href="/admin" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-shield-lock me-1"></i>Admin</a>
                 <button type="button" class="btn btn-light btn-sm me-3" data-bs-toggle="modal" data-bs-target="#newListModal">
                     <i class="bi bi-plus-lg me-1"></i>New List
                 </button>
@@ -90,7 +91,7 @@
                     <!-- Add Item Form inside list -->
                     <form hx-post="/lists/{{id}}/items" hx-target="#lists-container" hx-swap="innerHTML" class="mb-3">
                         <div class="input-group input-group-sm">
-                            <input type="text" class="form-control" id="add-item-{{id}}" name="name" placeholder="Add new item..." required autocomplete="off" hx-preserve>
+                            <input type="text" class="form-control" id="add-item-{{id}}" name="name" placeholder="Add new item..." required autocomplete="off" hx-preserve list="autosuggestions-list">
                             <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg"></i></button>
                         </div>
                     </form>
@@ -164,6 +165,14 @@
     </div>
 
     <div id="modals-holder"></div>
+
+    <!-- Autosuggestions Datalist -->
+    <datalist id="autosuggestions-list">
+        {{#suggestions}}
+        <option value="{{name}}"></option>
+        {{#_unused_}} {{/_unused_}}
+        {{/suggestions}}
+    </datalist>
 
     <!-- Bootstrap Bundle JS -->
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>

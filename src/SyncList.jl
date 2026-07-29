@@ -69,6 +69,24 @@ const DB_CONN = let
         username TEXT NOT NULL
     );
     """)
+
+    # Create autosuggestions table
+    SQLite.execute(db, """
+    CREATE TABLE IF NOT EXISTS autosuggestions (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL UNIQUE COLLATE NOCASE
+    );
+    """)
+
+    # Seed default German groceries if empty
+    r = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM autosuggestions;") |> first
+    if r.count == 0
+        default_groceries = ["Butter", "Milch", "Kaffee", "Brot", "Eier", "Käse", "Äpfel", "Bananen", "Kartoffeln", "Zwiebeln", "Nudeln", "Reis", "Zucker", "Salz", "Wasser", "Bier", "Tomaten", "Joghurt", "Schokolade", "Fleisch"]
+        for item in default_groceries
+            SQLite.DBInterface.execute(db, "INSERT INTO autosuggestions (name) VALUES (?);", (item,))
+        end
+    end
+
     db
 end
 
@@ -260,10 +278,12 @@ end
 # Renders the dashboard lists fragment
 function render_lists_fragment(username::String)
     lists = get_lists_for_user(username)
+    suggestions = db_query("SELECT name FROM autosuggestions ORDER BY name COLLATE NOCASE ASC;")
     context = Dict{String, Any}(
         "username" => username,
         "lists" => lists,
-        "fragment" => true
+        "fragment" => true,
+        "suggestions" => suggestions
     )
     template_path = joinpath(PROJECT_ROOT, "templates", "dashboard.mustache")
     return Mustache.render(read(template_path, String), context)
@@ -345,10 +365,12 @@ end
     end
     
     lists = get_lists_for_user(username)
+    suggestions = db_query("SELECT name FROM autosuggestions ORDER BY name COLLATE NOCASE ASC;")
     context = Dict{String, Any}(
         "username" => username,
         "lists" => lists,
-        "fragment" => false
+        "fragment" => false,
+        "suggestions" => suggestions
     )
     template_path = joinpath(PROJECT_ROOT, "templates", "dashboard.mustache")
     html_content = Mustache.render(read(template_path, String), context)
@@ -545,6 +567,7 @@ end
         r = db_query("SELECT MAX(position) as m FROM items WHERE list_id = ?;", (list_id,))
         max_pos = isempty(r) || r[1]["m"] === nothing ? 0 : r[1]["m"]
         db_execute("INSERT INTO items (list_id, name, is_done, position) VALUES (?, ?, 0, ?);", (list_id, name, max_pos + 1))
+        db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (name,))
         notify_sse_clients()
     end
     
@@ -698,6 +721,53 @@ end
     db_execute("DELETE FROM items WHERE id = ?;", (it_id,))
     notify_sse_clients()
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
+end
+
+@get "/admin" function(req::HTTP.Request)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    suggestions = db_query("SELECT * FROM autosuggestions ORDER BY name COLLATE NOCASE ASC;")
+    context = Dict{String, Any}(
+        "username" => username,
+        "suggestions" => suggestions
+    )
+    template_path = joinpath(PROJECT_ROOT, "templates", "admin.mustache")
+    html_content = Mustache.render(read(template_path, String), context)
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+end
+
+@post "/admin/suggestions" function(req::HTTP.Request)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    data = formdata(req)
+    name = strip(Base.get(data, "name", ""))
+    if !isempty(name)
+        db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (name,))
+    end
+    
+    return HTTP.Response(303, ["Location" => "/admin"])
+end
+
+@delete "/admin/suggestions/{id}" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    s_id = parse(Int, id)
+    db_execute("DELETE FROM autosuggestions WHERE id = ?;", (s_id,))
+    
+    if is_htmx(req)
+        return HTTP.Response(200, ["HX-Redirect" => "/admin"], body="")
+    else
+        return HTTP.Response(303, ["Location" => "/admin"])
+    end
 end
 
 function start_server(port=8080, async=false)

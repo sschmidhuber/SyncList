@@ -283,3 +283,66 @@ end
     @test db_list["name"] == "Hacked List Name"
     @test db_list["is_shared"] == 1
 end
+
+@testset "Autosuggestion and Admin Panel" begin
+    # 1. Clean the autosuggestions and sessions tables, or just verify the default German grocery items are seeded
+    suggestions = SyncList.db_query("SELECT name FROM autosuggestions;")
+    @test length(suggestions) >= 20
+    @test any(s -> s["name"] == "Butter", suggestions)
+    @test any(s -> s["name"] == "Milch", suggestions)
+    @test any(s -> s["name"] == "Kaffee", suggestions)
+
+    # 2. Add a new item to a list and verify it automatically gets collected in autosuggestions
+    # Reset lists/items
+    SyncList.db_execute("DELETE FROM items;")
+    SyncList.db_execute("DELETE FROM lists;")
+    SyncList.db_execute("DELETE FROM sessions;")
+
+    token = "test_autosuggest_token"
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
+
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("My Grocery List", "stefan", 0))
+    lists = SyncList.get_lists_for_user("stefan")
+    list_id = lists[1]["id"]
+
+    # Insert an item "Milchreis"
+    req_item = SyncList.HTTP.Request("POST", "/lists/$(list_id)/items", ["Cookie" => "session_id=$(token)"], "name=Milchreis")
+    res_item = SyncList.internalrequest(req_item)
+    @test res_item.status == 200
+
+    # Verify "Milchreis" is now in autosuggestions (case-insensitive check works)
+    sug_exists = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'Milchreis';")
+    @test sug_exists[1]["count"] == 1
+
+    # Insert a duplicate "milchreis" (different case) and verify it is NOT added as a duplicate
+    # (collated case-insensitively, so it ignores or overrides)
+    SyncList.db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", ("milchreis",))
+    sug_exists_lower = SyncList.db_query("SELECT name FROM autosuggestions WHERE name = 'Milchreis' OR name = 'milchreis';")
+    @test length(sug_exists_lower) == 1
+
+    # 3. Test Admin Panel Routes
+    # GET /admin should render the suggestions
+    admin_req = SyncList.HTTP.Request("GET", "/admin", ["Cookie" => "session_id=$(token)"])
+    admin_res = SyncList.internalrequest(admin_req)
+    @test admin_res.status == 200
+    admin_html = String(admin_res.body)
+    @test occursin("Milchreis", admin_html)
+
+    # POST /admin/suggestions adds a new item
+    add_req = SyncList.HTTP.Request("POST", "/admin/suggestions", ["Cookie" => "session_id=$(token)"], "name=Apfelsaft")
+    add_res = SyncList.internalrequest(add_req)
+    @test add_res.status == 303 # Redirects to /admin
+
+    sug_apfel = SyncList.db_query("SELECT id FROM autosuggestions WHERE name = 'Apfelsaft';")
+    @test !isempty(sug_apfel)
+    sug_apfel_id = sug_apfel[1]["id"]
+
+    # DELETE /admin/suggestions/{id} deletes the item
+    del_req = SyncList.HTTP.Request("DELETE", "/admin/suggestions/$(sug_apfel_id)", ["Cookie" => "session_id=$(token)"])
+    del_res = SyncList.internalrequest(del_req)
+    @test del_res.status == 303 # Redirects to /admin
+
+    # Verify Apfelsaft is deleted
+    sug_apfel_deleted = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'Apfelsaft';")
+    @test sug_apfel_deleted[1]["count"] == 0
+end
