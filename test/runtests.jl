@@ -223,3 +223,63 @@ end
     @test items[2]["name"] == "Item C"
     @test items[3]["name"] == "Item A"
 end
+
+@testset "Edit List Sharing and Renaming Restrictions" begin
+    # Reset/prepare tables
+    SyncList.db_execute("DELETE FROM lists;")
+    SyncList.db_execute("DELETE FROM sessions;")
+    
+    # Set up session tokens for owner and non-owner
+    owner_token = "owner_session_token"
+    non_owner_token = "non_owner_session_token"
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (owner_token, "stefan"))
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (non_owner_token, "alice"))
+    
+    # 1. Create a shared list owned by stefan
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Stefan's Shared List", "stefan", 1))
+    
+    # Get ID
+    lists = SyncList.db_query("SELECT id FROM lists WHERE name = 'Stefan''s Shared List';")
+    list_id = lists[1]["id"]
+    
+    # 2. Check the GET edit request for owner
+    get_owner_req = SyncList.HTTP.Request("GET", "/lists/$(list_id)/edit", ["Cookie" => "session_id=$(owner_token)"])
+    owner_res = SyncList.internalrequest(get_owner_req)
+    @test owner_res.status == 200
+    owner_html = String(owner_res.body)
+    @test occursin("Stefan&#39;s Shared List", owner_html)
+    @test occursin("edit-list-shared", owner_html) # switch is rendered for owner
+    
+    # 3. Check the GET edit request for non-owner
+    get_non_owner_req = SyncList.HTTP.Request("GET", "/lists/$(list_id)/edit", ["Cookie" => "session_id=$(non_owner_token)"])
+    non_owner_res = SyncList.internalrequest(get_non_owner_req)
+    @test non_owner_res.status == 200
+    non_owner_html = String(non_owner_res.body)
+    @test occursin("Stefan&#39;s Shared List", non_owner_html)
+    @test !occursin("edit-list-shared", non_owner_html) # switch is NOT rendered for non-owner
+    
+    # 4. POST edit by owner (turn it to private, rename to "Stefan's Private List")
+    post_owner_body = "name=Stefan's Private List&is_shared=0"
+    post_owner_req = SyncList.HTTP.Request("POST", "/lists/$(list_id)/edit", ["Cookie" => "session_id=$(owner_token)", "Content-Type" => "application/x-www-form-urlencoded"], post_owner_body)
+    res = SyncList.internalrequest(post_owner_req)
+    @test res.status == 200
+    
+    # Verify DB state updated
+    db_list = SyncList.db_query("SELECT name, is_shared FROM lists WHERE id = ?;", (list_id,))[1]
+    @test db_list["name"] == "Stefan's Private List"
+    @test db_list["is_shared"] == 0
+    
+    # 5. Bring it back to shared so non-owner has access
+    SyncList.db_execute("UPDATE lists SET is_shared = 1 WHERE id = ?;", (list_id,))
+    
+    # 6. POST edit by non-owner (rename list to "Hacked List Name", try to turn it to private)
+    post_non_owner_body = "name=Hacked List Name&is_shared=0"
+    post_non_owner_req = SyncList.HTTP.Request("POST", "/lists/$(list_id)/edit", ["Cookie" => "session_id=$(non_owner_token)", "Content-Type" => "application/x-www-form-urlencoded"], post_non_owner_body)
+    res = SyncList.internalrequest(post_non_owner_req)
+    @test res.status == 200
+    
+    # Verify DB state: name should change, but is_shared should NOT change (stays 1)
+    db_list = SyncList.db_query("SELECT name, is_shared FROM lists WHERE id = ?;", (list_id,))[1]
+    @test db_list["name"] == "Hacked List Name"
+    @test db_list["is_shared"] == 1
+end

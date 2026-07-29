@@ -435,14 +435,19 @@ end
         return HTTP.Response(403, "Forbidden")
     end
     
-    rows = db_query("SELECT name FROM lists WHERE id = ?;", (list_id,))
+    rows = db_query("SELECT owner, name, is_shared FROM lists WHERE id = ?;", (list_id,))
     if isempty(rows)
         return HTTP.Response(404, "Not Found")
     end
     
+    is_owner = rows[1]["owner"] == username
+    is_shared = rows[1]["is_shared"] == 1
+    
     context = Dict{String, Any}(
         "id" => list_id,
-        "name" => rows[1]["name"]
+        "name" => rows[1]["name"],
+        "is_owner" => is_owner,
+        "is_shared" => is_shared
     )
     template_path = joinpath(PROJECT_ROOT, "templates", "edit_list_modal.mustache")
     html_content = Mustache.render(read(template_path, String), context)
@@ -460,10 +465,22 @@ end
         return HTTP.Response(403, "Forbidden")
     end
     
+    rows = db_query("SELECT owner FROM lists WHERE id = ?;", (list_id,))
+    if isempty(rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    is_owner = rows[1]["owner"] == username
+    
     data = formdata(req)
     name = strip(Base.get(data, "name", ""))
+    
     if !isempty(name)
-        db_execute("UPDATE lists SET name = ? WHERE id = ?;", (name, list_id))
+        if is_owner
+            is_shared = Base.get(data, "is_shared", "0") == "1" ? 1 : 0
+            db_execute("UPDATE lists SET name = ?, is_shared = ? WHERE id = ?;", (name, is_shared, list_id))
+        else
+            db_execute("UPDATE lists SET name = ? WHERE id = ?;", (name, list_id))
+        end
         notify_sse_clients()
     end
     
