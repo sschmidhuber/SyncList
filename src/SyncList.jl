@@ -129,6 +129,19 @@ function notify_sse_clients()
     end
 end
 
+function close_sse_clients()
+    lock(SSE_LOCK) do
+        for chan in SSE_CLIENTS
+            try
+                close(chan)
+            catch e
+                # Ignore errors during closing
+            end
+        end
+        empty!(SSE_CLIENTS)
+    end
+end
+
 # Load Users from TOML
 const USERS_FILE = joinpath(PROJECT_ROOT, "users.toml")
 function load_users()
@@ -675,6 +688,7 @@ function start_server(port=8080, async=false)
 end
 
 function stop_server()
+    close_sse_clients()
     terminate()
 end
 
