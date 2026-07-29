@@ -60,7 +60,7 @@
         </div>
 
         <!-- Lists Container -->
-        <div id="lists-container" hx-get="/lists/content" hx-trigger="every 3s [document.activeElement.tagName !== 'INPUT']" hx-swap="innerHTML">
+        <div id="lists-container" hx-get="/lists/content" hx-trigger="every 3s [document.activeElement.type !== 'text']" hx-swap="innerHTML">
 {{/fragment}}
 
             {{#lists}}

@@ -430,7 +430,7 @@ end
 end
 
 function start_server(port=8080, async=false)
-    serve(port=port, async=async)
+    serve(host="0.0.0.0", port=port, async=async)
 end
 
 function stop_server()
