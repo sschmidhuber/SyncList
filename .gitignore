@@ -11,3 +11,4 @@ coverage
 docs/build/
 env
 node_modules
+synclist.db

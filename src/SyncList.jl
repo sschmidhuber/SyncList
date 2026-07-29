@@ -39,6 +39,14 @@ const DB_CONN = let
         FOREIGN KEY(list_id) REFERENCES lists(id) ON DELETE CASCADE
     );
     """)
+
+    # Create sessions table
+    SQLite.execute(db, """
+    CREATE TABLE IF NOT EXISTS sessions (
+        token TEXT PRIMARY KEY,
+        username TEXT NOT NULL
+    );
+    """)
     db
 end
 
@@ -109,7 +117,18 @@ function get_authenticated_user(req::HTTP.Request)
     if token === nothing
         return nothing
     end
-    return Base.get(SESSIONS, token, nothing)
+    username = Base.get(SESSIONS, token, nothing)
+    if username !== nothing
+        return username
+    end
+    # Fallback to database
+    rows = db_query("SELECT username FROM sessions WHERE token = ?;", (token,))
+    if !isempty(rows)
+        username = rows[1]["username"]
+        SESSIONS[token] = username
+        return username
+    end
+    return nothing
 end
 
 # Check if user can access list
@@ -207,9 +226,11 @@ end
         # Generate and save session token
         token = randstring(32)
         SESSIONS[token] = username
+        # Persist session in SQLite
+        db_execute("INSERT OR REPLACE INTO sessions (token, username) VALUES (?, ?);", (token, username))
         return HTTP.Response(303, [
             "Location" => "/lists",
-            "Set-Cookie" => "session_id=$token; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400"
+            "Set-Cookie" => "session_id=$token; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
         ])
     else
         template_path = joinpath(PROJECT_ROOT, "templates", "login.mustache")
@@ -222,6 +243,7 @@ end
     token = get_cookie(req, "session_id")
     if token !== nothing
         delete!(SESSIONS, token)
+        db_execute("DELETE FROM sessions WHERE token = ?;", (token,))
     end
     return HTTP.Response(303, [
         "Location" => "/login",
@@ -243,7 +265,13 @@ end
     )
     template_path = joinpath(PROJECT_ROOT, "templates", "dashboard.mustache")
     html_content = Mustache.render(read(template_path, String), context)
-    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+    
+    # Extend/refresh the session cookie lifetime (sliding expiration) on every successful visit
+    token = get_cookie(req, "session_id")
+    return HTTP.Response(200, [
+        "Content-Type" => "text/html",
+        "Set-Cookie" => "session_id=$token; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+    ], body=html_content)
 end
 
 @get "/lists/content" function(req::HTTP.Request)
@@ -401,8 +429,12 @@ end
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=render_lists_fragment(username))
 end
 
-function start_server(port=8080)
-    serve(port=port)
+function start_server(port=8080, async=false)
+    serve(port=port, async=async)
+end
+
+function stop_server()
+    terminate()
 end
 
 end # module

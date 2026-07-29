@@ -66,3 +66,26 @@ end
     res = SyncList.internalrequest(req)
     @test res.status == 303
 end
+
+@testset "Persistent Session Verification" begin
+    # Clear existing sessions
+    SyncList.db_execute("DELETE FROM sessions;")
+    empty!(SyncList.SESSIONS)
+
+    # Simulate a login by inserting a session directly
+    token = "testtoken12345"
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
+
+    # Create a request with the session cookie
+    req = SyncList.HTTP.Request("GET", "/lists", ["Cookie" => "session_id=testtoken12345"])
+    
+    # get_authenticated_user should fetch from database and cache it
+    @test SyncList.get_authenticated_user(req) == "stefan"
+    @test haskey(SyncList.SESSIONS, token)
+    @test SyncList.SESSIONS[token] == "stefan"
+
+    # Make request to check if it succeeds and refreshes the cookie
+    res = SyncList.internalrequest(req)
+    @test res.status == 200
+    @test any(h -> h.first == "Set-Cookie" && occursin("session_id=testtoken12345", h.second) && occursin("Max-Age=2592000", h.second), res.headers)
+end
