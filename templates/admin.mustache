@@ -33,7 +33,143 @@
         </div>
     </nav>
 
-    <div class="container px-3 pb-5" style="max-width: 600px;">
+    <div class="container px-3 pb-5" style="max-width: 800px;">
+        <!-- Error & Success Messages -->
+        {{#error}}
+        <div class="alert alert-danger alert-dismissible fade show shadow-sm" role="alert">
+            <i class="bi bi-exclamation-triangle-fill me-2"></i>{{error}}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {{/error}}
+        {{#success}}
+        <div class="alert alert-success alert-dismissible fade show shadow-sm" role="alert">
+            <i class="bi bi-check-circle-fill me-2"></i>{{success}}
+            <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
+        </div>
+        {{/success}}
+
+        <!-- Created Reset Link -->
+        {{#created_link}}
+        <div class="card admin-card border-warning bg-light mb-4">
+            <div class="card-body">
+                <h5 class="text-warning fw-bold"><i class="bi bi-link-45deg me-1"></i>Password Setup / Reset Link Created</h5>
+                <p class="small text-muted mb-3">Copy and send this link to the user so they can set their password:</p>
+                <div class="input-group">
+                    <input type="text" class="form-control bg-white" value="{{created_link}}" readonly id="reset-link-input">
+                    <button class="btn btn-warning" type="button" onclick="copyResetLink()"><i class="bi bi-clipboard me-1"></i>Copy</button>
+                </div>
+            </div>
+        </div>
+        <script>
+            function copyResetLink() {
+                var copyText = document.getElementById("reset-link-input");
+                copyText.select();
+                copyText.setSelectionRange(0, 99999);
+                navigator.clipboard.writeText(copyText.value);
+                alert("Link copied to clipboard!");
+            }
+        </script>
+        {{/created_link}}
+
+        <!-- Profile Settings (All Users) -->
+        <div class="card admin-card">
+            <div class="card-header bg-white py-3 border-0" style="border-top-left-radius: 0.75rem; border-top-right-radius: 0.75rem;">
+                <h5 class="mb-0 fw-bold"><i class="bi bi-person-fill text-primary me-2"></i>My Profile Settings</h5>
+            </div>
+            <div class="card-body">
+                <div class="row g-4">
+                    <div class="col-md-6">
+                        <h6 class="fw-bold mb-3">Change Username</h6>
+                        <form action="/admin/profile/username" method="POST">
+                            <div class="mb-3">
+                                <label class="form-label text-muted small">New Username</label>
+                                <input type="text" name="username" class="form-control" placeholder="New username..." required autocomplete="off">
+                            </div>
+                            <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-save me-1"></i>Update Username</button>
+                        </form>
+                    </div>
+                    <div class="col-md-6 border-start-md">
+                        <h6 class="fw-bold mb-3">Change Password</h6>
+                        <form action="/admin/profile/password" method="POST">
+                            <div class="mb-3">
+                                <label class="form-label text-muted small">New Password</label>
+                                <input type="password" name="password" class="form-control" placeholder="New password..." required autocomplete="new-password">
+                            </div>
+                            <button class="btn btn-primary btn-sm" type="submit"><i class="bi bi-key me-1"></i>Update Password</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        {{#is_admin}}
+        <!-- User Management (Admins Only) -->
+        <div class="card admin-card">
+            <div class="card-header bg-white py-3 border-0" style="border-top-left-radius: 0.75rem; border-top-right-radius: 0.75rem;">
+                <h5 class="mb-0 fw-bold"><i class="bi bi-people-fill text-primary me-2"></i>User Management</h5>
+            </div>
+            <div class="card-body">
+                <!-- Add User Form -->
+                <form action="/admin/users/create" method="POST" class="row g-3 align-items-end mb-4">
+                    <div class="col-md-6">
+                        <label class="form-label text-muted small fw-bold">Username</label>
+                        <input type="text" name="username" class="form-control" placeholder="New user's username..." required autocomplete="off">
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label text-muted small fw-bold">Role</label>
+                        <select name="role" class="form-select">
+                            <option value="user" selected>User</option>
+                            <option value="admin">Admin</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button class="btn btn-primary w-100" type="submit"><i class="bi bi-plus-lg me-1"></i>Create</button>
+                    </div>
+                </form>
+
+                <!-- Users List -->
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <thead>
+                            <tr>
+                                <th>Username</th>
+                                <th>Role</th>
+                                <th class="text-end">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {{#users}}
+                            <tr>
+                                <td><strong>{{username}}</strong></td>
+                                <td>
+                                    <span class="badge {{#is_admin_role}}bg-danger{{/is_admin_role}}{{^is_admin_role}}bg-secondary{{/is_admin_role}}">
+                                        {{role}}
+                                    </span>
+                                </td>
+                                <td class="text-end">
+                                    <form action="/admin/users/{{id}}/reset" method="POST" class="d-inline">
+                                        <button class="btn btn-sm btn-outline-warning me-1" type="submit">
+                                            <i class="bi bi-arrow-counterclockwise"></i> Reset Link
+                                        </button>
+                                    </form>
+                                    <button hx-get="/admin/users/{{id}}/edit" hx-target="body" hx-push-url="false" class="btn btn-sm btn-outline-primary me-1">
+                                        <i class="bi bi-pencil"></i> Edit
+                                    </button>
+                                    {{#is_not_self}}
+                                    <button hx-delete="/admin/users/{{id}}" hx-target="body" class="btn btn-sm btn-outline-danger">
+                                        <i class="bi bi-trash"></i> Delete
+                                    </button>
+                                    {{/is_not_self}}
+                                </td>
+                            </tr>
+                            {{/users}}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- Autosuggestion Admin (Admins Only) -->
         <div class="card admin-card">
             <div class="card-header bg-white py-3 border-0" style="border-top-left-radius: 0.75rem; border-top-right-radius: 0.75rem;">
                 <h5 class="mb-0 fw-bold"><i class="bi bi-gear-fill text-primary me-2"></i>Autosuggestion Admin</h5>
@@ -78,6 +214,7 @@
                 </div>
             </div>
         </div>
+        {{/is_admin}}
     </div>
 
     <!-- Bootstrap Bundle JS -->

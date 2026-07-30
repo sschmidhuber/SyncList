@@ -1,0 +1,36 @@
+<div class="modal fade" id="editUserModal" tabindex="-1" aria-labelledby="editUserModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content shadow">
+            <div class="modal-header border-0 pb-0">
+                <h5 class="modal-title fw-bold" id="editUserModalLabel"><i class="bi bi-pencil-fill me-2 text-primary"></i>Edit User</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="/admin/users/{{id}}/edit" method="POST">
+                <div class="modal-body pb-0">
+                    <div class="mb-3">
+                        <label for="edit-username" class="form-label fw-bold text-secondary">Username</label>
+                        <input type="text" class="form-control" id="edit-username" name="username" value="{{username}}" required autocomplete="off">
+                    </div>
+                    <div class="mb-3">
+                        <label for="edit-role" class="form-label fw-bold text-secondary">Role</label>
+                        <select id="edit-role" name="role" class="form-select">
+                            <option value="user" {{^is_admin_role}}selected{{/is_admin_role}}>User</option>
+                            <option value="admin" {{#is_admin_role}}selected{{/is_admin_role}}>Admin</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="modal-footer border-0 pt-3">
+                    <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary btn-sm px-3"><i class="bi bi-check-lg me-1"></i>Save</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+<script>
+    (function() {
+        var modalEl = document.getElementById('editUserModal');
+        var modal = new bootstrap.Modal(modalEl);
+        modal.show();
+    })();
+</script>

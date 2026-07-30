@@ -4,9 +4,10 @@ using Oxygen
 @oxidize
 using Mustache
 using SQLite
-using TOML
 using Dates
 using Random
+using SHA
+using UUIDs
 
 import HTTP
 
@@ -15,35 +16,22 @@ const DB_LOCK = ReentrantLock()
 const PROJECT_ROOT = dirname(@__DIR__)
 
 const DB_CONN = Ref{SQLite.DB}()
-const USERS_FILE = Ref{String}("")
+
+# Helper to hash password with SHA-256 and a random salt
+function hash_password(password::String, salt::String)
+    return bytes2hex(sha256(password * salt))
+end
 
 function init_db_and_users(db_path=nothing, users_path=nothing)
     if db_path === nothing
         db_path = Base.get(ENV, "SYNCLIST_DB", joinpath(homedir(), ".synclist", "synclist.db"))
     end
-    if users_path === nothing
-        users_path = Base.get(ENV, "SYNCLIST_USERS", joinpath(homedir(), ".synclist", "users.toml"))
-    end
 
-    # Ensure directories exist
+    # Ensure directory exists
     db_dir = dirname(db_path)
     if !isempty(db_dir)
         mkpath(db_dir)
     end
-    users_dir = dirname(users_path)
-    if !isempty(users_dir)
-        mkpath(users_dir)
-    end
-
-    # Copy template users.toml if the destination file does not exist
-    if !isfile(users_path)
-        template_path = joinpath(PROJECT_ROOT, "users.toml")
-        if isfile(template_path)
-            cp(template_path, users_path)
-        end
-    end
-
-    USERS_FILE[] = users_path
 
     lock(DB_LOCK) do
         # If DB connection is already open, close it first
@@ -117,6 +105,25 @@ function init_db_and_users(db_path=nothing, users_path=nothing)
         );
         """)
 
+        # Create users table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            salt TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user'
+        );
+        """)
+
+        # Create password_resets table
+        SQLite.execute(db, """
+        CREATE TABLE IF NOT EXISTS password_resets (
+            token TEXT PRIMARY KEY,
+            username TEXT NOT NULL
+        );
+        """)
+
         # Seed default German groceries if empty
         r = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM autosuggestions;") |> first
         if r.count == 0
@@ -124,6 +131,14 @@ function init_db_and_users(db_path=nothing, users_path=nothing)
             for item in default_groceries
                 SQLite.DBInterface.execute(db, "INSERT INTO autosuggestions (name) VALUES (?);", (item,))
             end
+        end
+
+        # Seed default admin user if empty
+        r_users = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM users;") |> first
+        if r_users.count == 0
+            admin_salt = string(uuid4())
+            admin_hash = bytes2hex(sha256("admin" * admin_salt))
+            SQLite.DBInterface.execute(db, "INSERT INTO users (username, password_hash, salt, role) VALUES (?, ?, ?, ?);", ("admin", admin_hash, admin_salt, "admin"))
         end
 
         DB_CONN[] = db
@@ -200,19 +215,6 @@ function close_sse_clients()
     end
 end
 
-# Load Users from TOML
-function load_users()
-    if !isfile(USERS_FILE[])
-        return Dict{String, Any}()
-    end
-    try
-        data = TOML.parsefile(USERS_FILE[])
-        return Base.get(data, "users", Dict{String, Any}())
-    catch e
-        @error "Error parsing users.toml" exception=e
-        return Dict{String, Any}()
-    end
-end
 
 # Helper to extract cookie from request
 function get_cookie(req::HTTP.Request, name::String)
@@ -367,8 +369,17 @@ end
     username = strip(Base.get(data, "username", ""))
     password = Base.get(data, "password", "")
     
-    users = load_users()
-    if haskey(users, username) && users[username] == password
+    rows = db_query("SELECT password_hash, salt FROM users WHERE username = ?;", (username,))
+    authenticated = false
+    if !isempty(rows)
+        user = rows[1]
+        hash = hash_password(password, user["salt"])
+        if hash == user["password_hash"]
+            authenticated = true
+        end
+    end
+    
+    if authenticated
         # Generate and save session token
         token = randstring(32)
         SESSIONS[token] = username
@@ -768,10 +779,34 @@ end
         return handle_unauthorized(req)
     end
     
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    is_admin = !isempty(user_rows) && user_rows[1]["role"] == "admin"
+    
     suggestions = db_query("SELECT * FROM autosuggestions ORDER BY name COLLATE NOCASE ASC;")
+    
+    users_list = []
+    if is_admin
+        users_list = db_query("SELECT id, username, role FROM users ORDER BY username COLLATE NOCASE ASC;")
+        for u in users_list
+            u["is_not_self"] = u["username"] != username
+            u["is_admin_role"] = u["role"] == "admin"
+        end
+    end
+    
+    uri = HTTP.URI(req.target)
+    query_params = HTTP.queryparams(uri)
+    created_link = Base.get(query_params, "created_link", nothing)
+    error_msg = Base.get(query_params, "error", nothing)
+    success_msg = Base.get(query_params, "success", nothing)
+    
     context = Dict{String, Any}(
         "username" => username,
-        "suggestions" => suggestions
+        "is_admin" => is_admin,
+        "suggestions" => suggestions,
+        "users" => users_list,
+        "created_link" => created_link,
+        "error" => error_msg,
+        "success" => success_msg
     )
     template_path = joinpath(PROJECT_ROOT, "templates", "admin.mustache")
     html_content = Mustache.render(read(template_path, String), context)
@@ -782,6 +817,11 @@ end
     username = get_authenticated_user(req)
     if username === nothing
         return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
     end
     
     data = formdata(req)
@@ -799,6 +839,11 @@ end
         return handle_unauthorized(req)
     end
     
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
     s_id = parse(Int, id)
     db_execute("DELETE FROM autosuggestions WHERE id = ?;", (s_id,))
     
@@ -809,7 +854,299 @@ end
     end
 end
 
-function start_server(host="0.0.0.0", port=8080, async=false)
+@post "/admin/profile/username" function(req::HTTP.Request)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    data = formdata(req)
+    new_username = strip(Base.get(data, "username", ""))
+    if isempty(new_username)
+        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+    end
+    
+    if new_username == username
+        return HTTP.Response(303, ["Location" => "/admin"])
+    end
+    
+    # Check if new username is already taken
+    exist = db_query("SELECT id FROM users WHERE username = ?;", (new_username,))
+    if !isempty(exist)
+        return HTTP.Response(303, ["Location" => "/admin?error=Username already taken"])
+    end
+    
+    # Update users table
+    db_execute("UPDATE users SET username = ? WHERE username = ?;", (new_username, username))
+    
+    # Update all lists owned by this user
+    db_execute("UPDATE lists SET owner = ? WHERE owner = ?;", (new_username, username))
+    
+    # Update active sessions in memory and DB
+    for (t, u) in collect(SESSIONS)
+        if u == username
+            SESSIONS[t] = new_username
+        end
+    end
+    db_execute("UPDATE sessions SET username = ? WHERE username = ?;", (new_username, username))
+    
+    return HTTP.Response(303, ["Location" => "/admin?success=Username updated successfully"])
+end
+
+@post "/admin/profile/password" function(req::HTTP.Request)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    data = formdata(req)
+    new_password = Base.get(data, "password", "")
+    if isempty(new_password)
+        return HTTP.Response(303, ["Location" => "/admin?error=Password cannot be empty"])
+    end
+    
+    new_salt = string(uuid4())
+    new_hash = hash_password(new_password, new_salt)
+    
+    db_execute("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?;", (new_hash, new_salt, username))
+    return HTTP.Response(303, ["Location" => "/admin?success=Password updated successfully"])
+end
+
+@post "/admin/users/create" function(req::HTTP.Request)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    data = formdata(req)
+    new_user = strip(Base.get(data, "username", ""))
+    role = strip(Base.get(data, "role", "user"))
+    if isempty(new_user)
+        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+    end
+    
+    # Check if username exists
+    exist = db_query("SELECT id FROM users WHERE username = ?;", (new_user,))
+    if !isempty(exist)
+        return HTTP.Response(303, ["Location" => "/admin?error=User already exists"])
+    end
+    
+    # Insert user with blank password first
+    db_execute("INSERT INTO users (username, password_hash, salt, role) VALUES (?, '', '', ?);", (new_user, role))
+    
+    # Create a reset password link/token
+    token = string(uuid4())
+    db_execute("INSERT INTO password_resets (token, username) VALUES (?, ?);", (token, new_user))
+    
+    host_header = HTTP.header(req, "Host", "localhost:8080")
+    reset_link = "http://$host_header/reset-password?token=$token"
+    
+    return HTTP.Response(303, ["Location" => "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
+end
+
+@get "/admin/users/{id}/edit" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    target_id = parse(Int, id)
+    target_rows = db_query("SELECT id, username, role FROM users WHERE id = ?;", (target_id,))
+    if isempty(target_rows)
+        return HTTP.Response(404, "Not Found")
+    end
+    
+    context = Dict{String, Any}(
+        "id" => target_id,
+        "username" => target_rows[1]["username"],
+        "is_admin_role" => target_rows[1]["role"] == "admin"
+    )
+    template_path = joinpath(PROJECT_ROOT, "templates", "edit_user_modal.mustache")
+    html_content = Mustache.render(read(template_path, String), context)
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+end
+
+@post "/admin/users/{id}/edit" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    target_id = parse(Int, id)
+    target_rows = db_query("SELECT username FROM users WHERE id = ?;", (target_id,))
+    if isempty(target_rows)
+        return HTTP.Response(404, "User Not Found")
+    end
+    target_username = target_rows[1]["username"]
+    
+    data = formdata(req)
+    new_username = strip(Base.get(data, "username", ""))
+    role = strip(Base.get(data, "role", "user"))
+    
+    if isempty(new_username)
+        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+    end
+    
+    if new_username != target_username
+        exist = db_query("SELECT id FROM users WHERE username = ?;", (new_username,))
+        if !isempty(exist)
+            return HTTP.Response(303, ["Location" => "/admin?error=Username already taken"])
+        end
+    end
+    
+    if target_username == username && role != "admin"
+        return HTTP.Response(303, ["Location" => "/admin?error=Cannot demote yourself from admin"])
+    end
+    
+    db_execute("UPDATE users SET username = ?, role = ? WHERE id = ?;", (new_username, role, target_id))
+    
+    if new_username != target_username
+        db_execute("UPDATE lists SET owner = ? WHERE owner = ?;", (new_username, target_username))
+        for (t, u) in collect(SESSIONS)
+            if u == target_username
+                SESSIONS[t] = new_username
+            end
+        end
+        db_execute("UPDATE sessions SET username = ? WHERE username = ?;", (new_username, target_username))
+    end
+    
+    return HTTP.Response(303, ["Location" => "/admin?success=User updated successfully"])
+end
+
+@delete "/admin/users/{id}" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    target_id = parse(Int, id)
+    target_rows = db_query("SELECT username FROM users WHERE id = ?;", (target_id,))
+    if isempty(target_rows)
+        return HTTP.Response(404, "User Not Found")
+    end
+    target_username = target_rows[1]["username"]
+    
+    if target_username == username
+        if is_htmx(req)
+            return HTTP.Response(200, ["HX-Redirect" => "/admin?error=Cannot delete yourself"], body="")
+        else
+            return HTTP.Response(303, ["Location" => "/admin?error=Cannot delete yourself"])
+        end
+    end
+    
+    db_execute("DELETE FROM users WHERE id = ?;", (target_id,))
+    db_execute("DELETE FROM password_resets WHERE username = ?;", (target_username,))
+    db_execute("DELETE FROM sessions WHERE username = ?;", (target_username,))
+    for (t, u) in collect(SESSIONS)
+        if u == target_username
+            delete!(SESSIONS, t)
+        end
+    end
+    
+    if is_htmx(req)
+        return HTTP.Response(200, ["HX-Redirect" => "/admin?success=User deleted"], body="")
+    else
+        return HTTP.Response(303, ["Location" => "/admin?success=User deleted"])
+    end
+end
+
+@post "/admin/users/{id}/reset" function(req::HTTP.Request, id::String)
+    username = get_authenticated_user(req)
+    if username === nothing
+        return handle_unauthorized(req)
+    end
+    
+    user_rows = db_query("SELECT role FROM users WHERE username = ?;", (username,))
+    if isempty(user_rows) || user_rows[1]["role"] != "admin"
+        return HTTP.Response(403, "Forbidden")
+    end
+    
+    target_id = parse(Int, id)
+    target_rows = db_query("SELECT username FROM users WHERE id = ?;", (target_id,))
+    if isempty(target_rows)
+        return HTTP.Response(404, "User Not Found")
+    end
+    target_username = target_rows[1]["username"]
+    
+    token = string(uuid4())
+    db_execute("INSERT OR REPLACE INTO password_resets (token, username) VALUES (?, ?);", (token, target_username))
+    
+    host_header = HTTP.header(req, "Host", "localhost:8080")
+    reset_link = "http://$host_header/reset-password?token=$token"
+    
+    return HTTP.Response(303, ["Location" => "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
+end
+
+@get "/reset-password" function(req::HTTP.Request)
+    uri = HTTP.URI(req.target)
+    query_params = HTTP.queryparams(uri)
+    token = Base.get(query_params, "token", "")
+    
+    if isempty(token)
+        return HTTP.Response(400, "Missing reset token")
+    end
+    
+    rows = db_query("SELECT username FROM password_resets WHERE token = ?;", (token,))
+    if isempty(rows)
+        return HTTP.Response(400, "Invalid or expired reset token")
+    end
+    
+    template_path = joinpath(PROJECT_ROOT, "templates", "reset_password.mustache")
+    html_content = Mustache.render(read(template_path, String), Dict{String, Any}("token" => token, "username" => rows[1]["username"]))
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+end
+
+@post "/reset-password" function(req::HTTP.Request)
+    data = formdata(req)
+    token = Base.get(data, "token", "")
+    password = Base.get(data, "password", "")
+    
+    if isempty(token) || isempty(password)
+        return HTTP.Response(400, "Missing token or password")
+    end
+    
+    rows = db_query("SELECT username FROM password_resets WHERE token = ?;", (token,))
+    if isempty(rows)
+        return HTTP.Response(400, "Invalid or expired reset token")
+    end
+    target_username = rows[1]["username"]
+    
+    new_salt = string(uuid4())
+    new_hash = hash_password(password, new_salt)
+    
+    db_execute("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?;", (new_hash, new_salt, target_username))
+    db_execute("DELETE FROM password_resets WHERE token = ?;", (token,))
+    
+    template_path = joinpath(PROJECT_ROOT, "templates", "login.mustache")
+    html_content = Mustache.render(read(template_path, String), Dict{String, Any}("success" => "Password set successfully! You can now log in."))
+    return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
+end
+
+function start_server(port::Integer, async::Bool=false)
+    start_server("0.0.0.0", port, async)
+end
+
+function start_server(host::String="0.0.0.0", port::Integer=8080, async::Bool=false)
     serve(host=host, port=port, async=async)
 end
 
@@ -819,8 +1156,8 @@ function stop_server()
 end
 
 function __init__()
-    # Initialize DB and Users File with environment defaults or defaults relative to package root
-    if !isassigned(DB_CONN) || USERS_FILE[] == ""
+    # Initialize DB with environment defaults or defaults relative to package root
+    if !isassigned(DB_CONN)
         try
             init_db_and_users()
         catch e
@@ -833,7 +1170,6 @@ function main(args)
     port = 8080
     host = "0.0.0.0"
     db_path = nothing
-    users_path = nothing
     
     i = 1
     while i <= length(args)
@@ -862,14 +1198,6 @@ function main(args)
                 println("Error: Missing database path")
                 return 1
             end
-        elseif arg == "-u" || arg == "--users"
-            if i + 1 <= length(args)
-                users_path = args[i+1]
-                i += 2
-            else
-                println("Error: Missing users path")
-                return 1
-            end
         elseif arg == "-h" || arg == "--help"
             println("SyncList - Collaborative list app")
             println("Usage: synclist [options]")
@@ -877,7 +1205,6 @@ function main(args)
             println("  -p, --port <port>       Port to listen on (default: 8080)")
             println("  -o, --host <host>       Host to bind to (default: 0.0.0.0)")
             println("  -d, --db <path>         Path to SQLite database file")
-            println("  -u, --users <path>      Path to users TOML configuration file")
             println("  -h, --help              Show this help message")
             return 0
         else
@@ -886,8 +1213,8 @@ function main(args)
         end
     end
     
-    # Initialize DB and Users
-    init_db_and_users(db_path, users_path)
+    # Initialize DB
+    init_db_and_users(db_path)
     
     println("Starting SyncList server on ", host, ":", port)
     start_server(host, port, false)

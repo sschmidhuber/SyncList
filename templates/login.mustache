@@ -40,6 +40,12 @@
             </div>
             {{/error}}
 
+            {{#success}}
+            <div class="alert alert-success" role="alert">
+                {{success}}
+            </div>
+            {{/success}}
+
             <form action="/login" method="POST">
                 <div class="mb-3">
                     <label for="username" class="form-label">Username</label>

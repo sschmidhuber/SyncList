@@ -3,8 +3,6 @@ using Test
 # Use temp files for testing to isolate from production ~/.synclist/
 const TMP_DIR = mktempdir()
 ENV["SYNCLIST_DB"] = joinpath(TMP_DIR, "synclist_test.db")
-ENV["SYNCLIST_USERS"] = joinpath(TMP_DIR, "users_test.toml")
-cp(joinpath(dirname(@__DIR__), "users.toml"), ENV["SYNCLIST_USERS"])
 
 # Include backend and verify compilation
 include("../src/SyncList.jl")
@@ -13,6 +11,7 @@ include("../src/SyncList.jl")
     # Reset tables and auto-increment sequences
     SyncList.db_execute("DELETE FROM items;")
     SyncList.db_execute("DELETE FROM lists;")
+    SyncList.db_execute("DELETE FROM users;")
     try
         SyncList.db_execute("DELETE FROM sqlite_sequence WHERE name='lists';")
         SyncList.db_execute("DELETE FROM sqlite_sequence WHERE name='items';")
@@ -20,10 +19,19 @@ include("../src/SyncList.jl")
         # sqlite_sequence might not exist yet if AUTOINCREMENT has not run
     end
 
-    # 1. Test Load Users
-    users = SyncList.load_users()
-    @test haskey(users, "stefan")
-    @test users["stefan"] == "julia123"
+    # Re-trigger database initialization to seed default admin on an empty DB
+    SyncList.init_db_and_users(ENV["SYNCLIST_DB"])
+
+    # 1. Test Seeded Admin and User hashing
+    admin_rows = SyncList.db_query("SELECT * FROM users WHERE username = 'admin';")
+    @test !isempty(admin_rows)
+    @test admin_rows[1]["role"] == "admin"
+    @test SyncList.hash_password("admin", admin_rows[1]["salt"]) == admin_rows[1]["password_hash"]
+
+    # Insert test users
+    stefan_salt = "somesalt"
+    stefan_hash = SyncList.hash_password("julia123", stefan_salt)
+    SyncList.db_execute("INSERT INTO users (username, password_hash, salt, role) VALUES (?, ?, ?, ?);", ("stefan", stefan_hash, stefan_salt, "user"))
 
     # 2. Test List creation and retrieval
     SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Private List", "stefan", 0))
@@ -291,6 +299,9 @@ end
 end
 
 @testset "Autosuggestion and Admin Panel" begin
+    # Make stefan an admin so he can access admin panel autosuggestion routes
+    SyncList.db_execute("UPDATE users SET role = 'admin' WHERE username = 'stefan';")
+
     # 1. Clean the autosuggestions and sessions tables, or just verify the default German grocery items are seeded
     suggestions = SyncList.db_query("SELECT name FROM autosuggestions;")
     @test length(suggestions) >= 20
