@@ -14,8 +14,8 @@ SyncList is a modern, collaborative, real-time list and grocery planning applica
   - Adding new items to lists in real-time.
 * **Smart Checked Items Auto-Hiding**: Checked/done items are automatically hidden 24 hours after completion to keep lists clean. A simple visibility toggle allows users to show or hide these archived items at any time.
 * **Autosuggestions**: Offers smart, case-insensitive autocomplete suggestions when typing new items (pre-seeded with common German groceries).
-* **Admin Panel**: An integrated administration interface accessible at `/admin` to add, view, and delete autosuggestions.
-* **TOML-Based Multi-user Authentication**: Cookie-based persistent sessions managed securely with a database-backed session store, validating credentials against a standard `users.toml` configuration.
+* **Settings & Admin Panel**: An integrated Settings interface accessible at `/admin` (via the "Settings" menu entry) where users can manage their own profile (change username or password), and administrators can manage users (create, edit, delete, reset passwords) and modify autosuggestion records.
+* **Multi-user Authentication & Management**: Secure cookie-based persistent sessions with a database-backed session store. Supports roles (`admin` or `user`) and dynamically seeds a default administrative user if the user store is empty.
 
 ---
 
@@ -58,26 +58,22 @@ synclist [options]
 | `-p, --port <port>` | Port to listen on | `8080` |
 | `-o, --host <host>` | Host interface to bind to | `0.0.0.0` |
 | `-d, --db <path>` | Path to the SQLite database file | `synclist.db` *(relative to app root)* |
-| `-u, --users <path>` | Path to the `users.toml` configuration file | `users.toml` *(relative to app root)* |
 | `-h, --help` | Show the help message and exit | — |
 
 ---
 
 ## ⚙️ Configuration
 
-### Authentication (`users.toml`)
-Users and their plain-text passwords can be configured inside a `users.toml` file matching this format:
+### First-Time Login / Seeding
+On the first application start with a fresh database, SyncList automatically seeds a default administrator account:
+* **Username**: `admin`
+* **Password**: `admin`
 
-```toml
-[users]
-stefan = "julia123"
-alice = "secret456"
-```
+Upon logging in, it is highly recommended to immediately change this default password via the **Settings** menu page.
 
 ### Environment Variables
-You can also override paths using environment variables instead of command-line flags:
+You can also override the database path using environment variables instead of command-line flags:
 * `SYNCLIST_DB`: Path to custom SQLite database.
-* `SYNCLIST_USERS`: Path to custom `users.toml` configuration.
 
 ---
 
