@@ -19,10 +19,28 @@ const USERS_FILE = Ref{String}("")
 
 function init_db_and_users(db_path=nothing, users_path=nothing)
     if db_path === nothing
-        db_path = Base.get(ENV, "SYNCLIST_DB", joinpath(PROJECT_ROOT, "synclist.db"))
+        db_path = Base.get(ENV, "SYNCLIST_DB", joinpath(homedir(), ".synclist", "synclist.db"))
     end
     if users_path === nothing
-        users_path = Base.get(ENV, "SYNCLIST_USERS", joinpath(PROJECT_ROOT, "users.toml"))
+        users_path = Base.get(ENV, "SYNCLIST_USERS", joinpath(homedir(), ".synclist", "users.toml"))
+    end
+
+    # Ensure directories exist
+    db_dir = dirname(db_path)
+    if !isempty(db_dir)
+        mkpath(db_dir)
+    end
+    users_dir = dirname(users_path)
+    if !isempty(users_dir)
+        mkpath(users_dir)
+    end
+
+    # Copy template users.toml if the destination file does not exist
+    if !isfile(users_path)
+        template_path = joinpath(PROJECT_ROOT, "users.toml")
+        if isfile(template_path)
+            cp(template_path, users_path)
+        end
     end
 
     USERS_FILE[] = users_path
@@ -803,7 +821,11 @@ end
 function __init__()
     # Initialize DB and Users File with environment defaults or defaults relative to package root
     if !isassigned(DB_CONN) || USERS_FILE[] == ""
-        init_db_and_users()
+        try
+            init_db_and_users()
+        catch e
+            @warn "Failed to auto-initialize database during module initialization: $e"
+        end
     end
 end
 

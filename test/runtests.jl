@@ -1,5 +1,11 @@
 using Test
 
+# Use temp files for testing to isolate from production ~/.synclist/
+const TMP_DIR = mktempdir()
+ENV["SYNCLIST_DB"] = joinpath(TMP_DIR, "synclist_test.db")
+ENV["SYNCLIST_USERS"] = joinpath(TMP_DIR, "users_test.toml")
+cp(joinpath(dirname(@__DIR__), "users.toml"), ENV["SYNCLIST_USERS"])
+
 # Include backend and verify compilation
 include("../src/SyncList.jl")
 
