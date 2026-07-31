@@ -5,7 +5,7 @@
                 <h5 class="modal-title fw-bold" id="editItemModalLabel"><i class="bi bi-pencil-fill me-2 text-primary"></i>Rename Item</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <form hx-post="/items/{{id}}/edit" hx-target="#lists-container" hx-swap="innerHTML">
+            <form hx-post="{{base_path}}/items/{{id}}/edit" hx-target="#lists-container" hx-swap="innerHTML">
                 <div class="modal-body pb-0">
                     <div class="mb-3">
                         <label for="edit-item-name" class="form-label fw-bold text-secondary">Item Name</label>

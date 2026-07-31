@@ -363,3 +363,28 @@ end
     sug_apfel_deleted = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'Apfelsaft';")
     @test sug_apfel_deleted[1]["count"] == 0
 end
+
+@testset "Reverse Proxy and Config Tests" begin
+    # 1. Test get_base_path with empty base_path
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => ""))
+    @test SyncList.get_base_path() == ""
+
+    # 2. Test get_base_path sanitization
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => "app1"))
+    @test SyncList.get_base_path() == "/app1"
+
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => "/app2/"))
+    @test SyncList.get_base_path() == "/app2"
+
+    # 3. Test prefix stripping middleware
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => "/app2"))
+    req = SyncList.HTTP.Request("GET", "/app2/lists")
+    
+    # We call the prefix_stripper_middleware manually
+    stripped_handler = SyncList.prefix_stripper_middleware(identity)
+    res_req = stripped_handler(req)
+    @test res_req.target == "/lists"
+    
+    # Reset config back to default empty prefix
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => ""))
+end

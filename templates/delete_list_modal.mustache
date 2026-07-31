@@ -10,7 +10,7 @@
             </div>
             <div class="modal-footer border-0 pt-0">
                 <button type="button" class="btn btn-outline-secondary btn-sm px-3" data-bs-dismiss="modal">Cancel</button>
-                <button hx-delete="/lists/{{id}}" hx-target="#lists-container" hx-swap="innerHTML" class="btn btn-danger btn-sm px-3" data-bs-dismiss="modal"><i class="bi bi-trash me-1"></i>Delete</button>
+                <button hx-delete="{{base_path}}/lists/{{id}}" hx-target="#lists-container" hx-swap="innerHTML" class="btn btn-danger btn-sm px-3" data-bs-dismiss="modal"><i class="bi bi-trash me-1"></i>Delete</button>
             </div>
         </div>
     </div>

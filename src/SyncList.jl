@@ -8,8 +8,90 @@ using Dates
 using Random
 using SHA
 using UUIDs
+using TOML
 
 import HTTP
+
+# Global configuration state
+const CONFIG = Ref{Dict{String, Any}}()
+
+function load_config()
+    default_config = Dict{String, Any}(
+        "server" => Dict{String, Any}(
+            "host" => "0.0.0.0",
+            "port" => 8080,
+            "base_path" => ""
+        )
+    )
+    
+    # Check env variable first, then default to ~/.synclist/config.toml
+    config_path = Base.get(ENV, "SYNCLIST_CONFIG", joinpath(homedir(), ".synclist", "config.toml"))
+    
+    if !isfile(config_path)
+        # Initialize default config.toml on first start
+        try
+            config_dir = dirname(config_path)
+            if !isempty(config_dir)
+                mkpath(config_dir)
+            end
+            write(config_path, """
+            [server]
+            host = "0.0.0.0"
+            port = 8080
+            base_path = ""
+            """)
+        catch e
+            @warn "Failed to initialize default config.toml at $config_path: $e"
+        end
+    end
+    
+    if isfile(config_path)
+        try
+            loaded = TOML.parsefile(config_path)
+            if haskey(loaded, "server") && loaded["server"] isa Dict
+                merge!(default_config["server"], loaded["server"])
+            end
+            if haskey(loaded, "database")
+                default_config["database"] = loaded["database"]
+            end
+        catch e
+            @warn "Failed to parse config.toml: $e"
+        end
+    end
+    CONFIG[] = default_config
+end
+
+function get_base_path()
+    if !isassigned(CONFIG)
+        load_config()
+    end
+    server_cfg = Base.get(CONFIG[], "server", Dict{String, Any}())
+    base_path = strip(Base.get(server_cfg, "base_path", ""))
+    if !isempty(base_path)
+        if !startswith(base_path, "/")
+            base_path = "/" * base_path
+        end
+        if endswith(base_path, "/") && length(base_path) > 1
+            base_path = base_path[1:prevind(base_path, end)]
+        end
+    end
+    return base_path
+end
+
+# Middleware to strip prefix
+function prefix_stripper_middleware(handler)
+    return function(req::HTTP.Request)
+        base_path = get_base_path()
+        if !isempty(base_path) && startswith(req.target, base_path)
+            new_target = req.target[nextind(req.target, length(base_path)):end]
+            if isempty(new_target) || !startswith(new_target, '/')
+                new_target = "/" * new_target
+            end
+            req.target = new_target
+        end
+        return handler(req)
+    end
+end
 
 # Database and Lock initialization
 const DB_LOCK = ReentrantLock()
@@ -316,6 +398,12 @@ function get_lists_for_user(username::String)
     return lists
 end
 
+function render_mustache(template_file::String, context::Dict{String, Any}=Dict{String, Any}())
+    context["base_path"] = get_base_path()
+    template_path = joinpath(PROJECT_ROOT, "templates", template_file)
+    return Mustache.render(read(template_path, String), context)
+end
+
 # Renders the dashboard lists fragment
 function render_lists_fragment(username::String)
     lists = get_lists_for_user(username)
@@ -326,8 +414,7 @@ function render_lists_fragment(username::String)
         "fragment" => true,
         "suggestions" => suggestions
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "dashboard.mustache")
-    return Mustache.render(read(template_path, String), context)
+    return render_mustache("dashboard.mustache", context)
 end
 
 # Check if request is from HTMX
@@ -337,10 +424,11 @@ end
 
 # Response Helper for Unauthorized HTMX vs Full Page
 function handle_unauthorized(req::HTTP.Request)
+    bp = get_base_path()
     if is_htmx(req)
-        return HTTP.Response(200, ["HX-Redirect" => "/login"], body="")
+        return HTTP.Response(200, ["HX-Redirect" => bp * "/login"], body="")
     else
-        return HTTP.Response(303, ["Location" => "/login"], body="")
+        return HTTP.Response(303, ["Location" => bp * "/login"], body="")
     end
 end
 
@@ -351,16 +439,15 @@ end
     if username === nothing
         return handle_unauthorized(req)
     end
-    return HTTP.Response(303, ["Location" => "/lists"])
+    return HTTP.Response(303, ["Location" => get_base_path() * "/lists"])
 end
 
 @get "/login" function(req::HTTP.Request)
     username = get_authenticated_user(req)
     if username !== nothing
-        return HTTP.Response(303, ["Location" => "/lists"])
+        return HTTP.Response(303, ["Location" => get_base_path() * "/lists"])
     end
-    template_path = joinpath(PROJECT_ROOT, "templates", "login.mustache")
-    html_content = Mustache.render(read(template_path, String), Dict{String, Any}())
+    html_content = render_mustache("login.mustache")
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -379,6 +466,8 @@ end
         end
     end
     
+    bp = get_base_path()
+    cookie_path = isempty(bp) ? "/" : bp
     if authenticated
         # Generate and save session token
         token = randstring(32)
@@ -386,12 +475,11 @@ end
         # Persist session in SQLite
         db_execute("INSERT OR REPLACE INTO sessions (token, username) VALUES (?, ?);", (token, username))
         return HTTP.Response(303, [
-            "Location" => "/lists",
-            "Set-Cookie" => "session_id=$token; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+            "Location" => bp * "/lists",
+            "Set-Cookie" => "session_id=$token; Path=$cookie_path; HttpOnly; SameSite=Lax; Max-Age=2592000"
         ])
     else
-        template_path = joinpath(PROJECT_ROOT, "templates", "login.mustache")
-        html_content = Mustache.render(read(template_path, String), Dict{String, Any}("error" => "Invalid username or password"))
+        html_content = render_mustache("login.mustache", Dict{String, Any}("error" => "Invalid username or password"))
         return HTTP.Response(401, ["Content-Type" => "text/html"], body=html_content)
     end
 end
@@ -402,9 +490,11 @@ end
         delete!(SESSIONS, token)
         db_execute("DELETE FROM sessions WHERE token = ?;", (token,))
     end
+    bp = get_base_path()
+    cookie_path = isempty(bp) ? "/" : bp
     return HTTP.Response(303, [
-        "Location" => "/login",
-        "Set-Cookie" => "session_id=; Path=/; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
+        "Location" => bp * "/login",
+        "Set-Cookie" => "session_id=; Path=$cookie_path; HttpOnly; SameSite=Lax; Expires=Thu, 01 Jan 1970 00:00:00 GMT"
     ])
 end
 
@@ -422,14 +512,15 @@ end
         "fragment" => false,
         "suggestions" => suggestions
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "dashboard.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("dashboard.mustache", context)
     
+    bp = get_base_path()
+    cookie_path = isempty(bp) ? "/" : bp
     # Extend/refresh the session cookie lifetime (sliding expiration) on every successful visit
     token = get_cookie(req, "session_id")
     return HTTP.Response(200, [
         "Content-Type" => "text/html",
-        "Set-Cookie" => "session_id=$token; Path=/; HttpOnly; SameSite=Lax; Max-Age=2592000"
+        "Set-Cookie" => "session_id=$token; Path=$cookie_path; HttpOnly; SameSite=Lax; Max-Age=2592000"
     ], body=html_content)
 end
 
@@ -521,8 +612,7 @@ end
         "is_owner" => is_owner,
         "is_shared" => is_shared
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "edit_list_modal.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("edit_list_modal.mustache", context)
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -579,8 +669,7 @@ end
         "id" => list_id,
         "name" => rows[1]["name"]
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "delete_list_modal.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("delete_list_modal.mustache", context)
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -719,8 +808,7 @@ end
         "id" => it_id,
         "name" => item["name"]
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "edit_item_modal.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("edit_item_modal.mustache", context)
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -808,8 +896,7 @@ end
         "error" => error_msg,
         "success" => success_msg
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "admin.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("admin.mustache", context)
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -830,7 +917,8 @@ end
         db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (name,))
     end
     
-    return HTTP.Response(303, ["Location" => "/admin"])
+    bp = get_base_path()
+    return HTTP.Response(303, ["Location" => bp * "/admin"])
 end
 
 @delete "/admin/suggestions/{id}" function(req::HTTP.Request, id::String)
@@ -847,10 +935,11 @@ end
     s_id = parse(Int, id)
     db_execute("DELETE FROM autosuggestions WHERE id = ?;", (s_id,))
     
+    bp = get_base_path()
     if is_htmx(req)
-        return HTTP.Response(200, ["HX-Redirect" => "/admin"], body="")
+        return HTTP.Response(200, ["HX-Redirect" => bp * "/admin"], body="")
     else
-        return HTTP.Response(303, ["Location" => "/admin"])
+        return HTTP.Response(303, ["Location" => bp * "/admin"])
     end
 end
 
@@ -862,18 +951,19 @@ end
     
     data = formdata(req)
     new_username = strip(Base.get(data, "username", ""))
+    bp = get_base_path()
     if isempty(new_username)
-        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Username cannot be empty"])
     end
     
     if new_username == username
-        return HTTP.Response(303, ["Location" => "/admin"])
+        return HTTP.Response(303, ["Location" => bp * "/admin"])
     end
     
     # Check if new username is already taken
     exist = db_query("SELECT id FROM users WHERE username = ?;", (new_username,))
     if !isempty(exist)
-        return HTTP.Response(303, ["Location" => "/admin?error=Username already taken"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Username already taken"])
     end
     
     # Update users table
@@ -890,7 +980,7 @@ end
     end
     db_execute("UPDATE sessions SET username = ? WHERE username = ?;", (new_username, username))
     
-    return HTTP.Response(303, ["Location" => "/admin?success=Username updated successfully"])
+    return HTTP.Response(303, ["Location" => bp * "/admin?success=Username updated successfully"])
 end
 
 @post "/admin/profile/password" function(req::HTTP.Request)
@@ -901,15 +991,16 @@ end
     
     data = formdata(req)
     new_password = Base.get(data, "password", "")
+    bp = get_base_path()
     if isempty(new_password)
-        return HTTP.Response(303, ["Location" => "/admin?error=Password cannot be empty"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Password cannot be empty"])
     end
     
     new_salt = string(uuid4())
     new_hash = hash_password(new_password, new_salt)
     
     db_execute("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?;", (new_hash, new_salt, username))
-    return HTTP.Response(303, ["Location" => "/admin?success=Password updated successfully"])
+    return HTTP.Response(303, ["Location" => bp * "/admin?success=Password updated successfully"])
 end
 
 @post "/admin/users/create" function(req::HTTP.Request)
@@ -926,14 +1017,15 @@ end
     data = formdata(req)
     new_user = strip(Base.get(data, "username", ""))
     role = strip(Base.get(data, "role", "user"))
+    bp = get_base_path()
     if isempty(new_user)
-        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Username cannot be empty"])
     end
     
     # Check if username exists
     exist = db_query("SELECT id FROM users WHERE username = ?;", (new_user,))
     if !isempty(exist)
-        return HTTP.Response(303, ["Location" => "/admin?error=User already exists"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=User already exists"])
     end
     
     # Insert user with blank password first
@@ -944,9 +1036,10 @@ end
     db_execute("INSERT INTO password_resets (token, username) VALUES (?, ?);", (token, new_user))
     
     host_header = HTTP.header(req, "Host", "localhost:8080")
-    reset_link = "http://$host_header/reset-password?token=$token"
+    proto = HTTP.header(req, "X-Forwarded-Proto", "http")
+    reset_link = "$proto://$host_header$bp/reset-password?token=$token"
     
-    return HTTP.Response(303, ["Location" => "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
+    return HTTP.Response(303, ["Location" => bp * "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
 end
 
 @get "/admin/users/{id}/edit" function(req::HTTP.Request, id::String)
@@ -971,8 +1064,7 @@ end
         "username" => target_rows[1]["username"],
         "is_admin_role" => target_rows[1]["role"] == "admin"
     )
-    template_path = joinpath(PROJECT_ROOT, "templates", "edit_user_modal.mustache")
-    html_content = Mustache.render(read(template_path, String), context)
+    html_content = render_mustache("edit_user_modal.mustache", context)
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -997,20 +1089,21 @@ end
     data = formdata(req)
     new_username = strip(Base.get(data, "username", ""))
     role = strip(Base.get(data, "role", "user"))
+    bp = get_base_path()
     
     if isempty(new_username)
-        return HTTP.Response(303, ["Location" => "/admin?error=Username cannot be empty"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Username cannot be empty"])
     end
     
     if new_username != target_username
         exist = db_query("SELECT id FROM users WHERE username = ?;", (new_username,))
         if !isempty(exist)
-            return HTTP.Response(303, ["Location" => "/admin?error=Username already taken"])
+            return HTTP.Response(303, ["Location" => bp * "/admin?error=Username already taken"])
         end
     end
     
     if target_username == username && role != "admin"
-        return HTTP.Response(303, ["Location" => "/admin?error=Cannot demote yourself from admin"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?error=Cannot demote yourself from admin"])
     end
     
     db_execute("UPDATE users SET username = ?, role = ? WHERE id = ?;", (new_username, role, target_id))
@@ -1025,7 +1118,7 @@ end
         db_execute("UPDATE sessions SET username = ? WHERE username = ?;", (new_username, target_username))
     end
     
-    return HTTP.Response(303, ["Location" => "/admin?success=User updated successfully"])
+    return HTTP.Response(303, ["Location" => bp * "/admin?success=User updated successfully"])
 end
 
 @delete "/admin/users/{id}" function(req::HTTP.Request, id::String)
@@ -1045,12 +1138,13 @@ end
         return HTTP.Response(404, "User Not Found")
     end
     target_username = target_rows[1]["username"]
+    bp = get_base_path()
     
     if target_username == username
         if is_htmx(req)
-            return HTTP.Response(200, ["HX-Redirect" => "/admin?error=Cannot delete yourself"], body="")
+            return HTTP.Response(200, ["HX-Redirect" => bp * "/admin?error=Cannot delete yourself"], body="")
         else
-            return HTTP.Response(303, ["Location" => "/admin?error=Cannot delete yourself"])
+            return HTTP.Response(303, ["Location" => bp * "/admin?error=Cannot delete yourself"])
         end
     end
     
@@ -1064,9 +1158,9 @@ end
     end
     
     if is_htmx(req)
-        return HTTP.Response(200, ["HX-Redirect" => "/admin?success=User deleted"], body="")
+        return HTTP.Response(200, ["HX-Redirect" => bp * "/admin?success=User deleted"], body="")
     else
-        return HTTP.Response(303, ["Location" => "/admin?success=User deleted"])
+        return HTTP.Response(303, ["Location" => bp * "/admin?success=User deleted"])
     end
 end
 
@@ -1091,10 +1185,12 @@ end
     token = string(uuid4())
     db_execute("INSERT OR REPLACE INTO password_resets (token, username) VALUES (?, ?);", (token, target_username))
     
+    bp = get_base_path()
     host_header = HTTP.header(req, "Host", "localhost:8080")
-    reset_link = "http://$host_header/reset-password?token=$token"
+    proto = HTTP.header(req, "X-Forwarded-Proto", "http")
+    reset_link = "$proto://$host_header$bp/reset-password?token=$token"
     
-    return HTTP.Response(303, ["Location" => "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
+    return HTTP.Response(303, ["Location" => bp * "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
 end
 
 @get "/reset-password" function(req::HTTP.Request)
@@ -1111,8 +1207,7 @@ end
         return HTTP.Response(400, "Invalid or expired reset token")
     end
     
-    template_path = joinpath(PROJECT_ROOT, "templates", "reset_password.mustache")
-    html_content = Mustache.render(read(template_path, String), Dict{String, Any}("token" => token, "username" => rows[1]["username"]))
+    html_content = render_mustache("reset_password.mustache", Dict{String, Any}("token" => token, "username" => rows[1]["username"]))
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -1137,8 +1232,7 @@ end
     db_execute("UPDATE users SET password_hash = ?, salt = ? WHERE username = ?;", (new_hash, new_salt, target_username))
     db_execute("DELETE FROM password_resets WHERE token = ?;", (token,))
     
-    template_path = joinpath(PROJECT_ROOT, "templates", "login.mustache")
-    html_content = Mustache.render(read(template_path, String), Dict{String, Any}("success" => "Password set successfully! You can now log in."))
+    html_content = render_mustache("login.mustache", Dict{String, Any}("success" => "Password set successfully! You can now log in."))
     return HTTP.Response(200, ["Content-Type" => "text/html"], body=html_content)
 end
 
@@ -1147,7 +1241,7 @@ function start_server(port::Integer, async::Bool=false)
 end
 
 function start_server(host::String="0.0.0.0", port::Integer=8080, async::Bool=false)
-    serve(host=host, port=port, async=async)
+    serve(host=host, port=port, async=async, middleware=[prefix_stripper_middleware])
 end
 
 function stop_server()
@@ -1167,8 +1261,10 @@ function __init__()
 end
 
 function main(args)
-    port = 8080
-    host = "0.0.0.0"
+    load_config()
+    server_cfg = Base.get(CONFIG[], "server", Dict{String, Any}())
+    port = Base.get(server_cfg, "port", 8080)
+    host = Base.get(server_cfg, "host", "0.0.0.0")
     db_path = nothing
     
     i = 1

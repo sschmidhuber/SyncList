@@ -38,15 +38,15 @@
                 <button type="button" class="btn btn-light btn-sm me-2" data-bs-toggle="modal" data-bs-target="#newListModal">
                     <i class="bi bi-plus-lg me-sm-1"></i><span class="d-none d-sm-inline">New List</span>
                 </button>
-                <a href="/admin" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-gear-fill me-sm-1"></i><span class="d-none d-sm-inline">Settings</span></a>
-                <a href="/logout" class="btn btn-outline-light btn-sm"><i class="bi bi-box-arrow-right me-sm-1"></i><span class="d-none d-sm-inline">Sign Out</span></a>
+                <a href="{{base_path}}/admin" class="btn btn-outline-light btn-sm me-2"><i class="bi bi-gear-fill me-sm-1"></i><span class="d-none d-sm-inline">Settings</span></a>
+                <a href="{{base_path}}/logout" class="btn btn-outline-light btn-sm"><i class="bi bi-box-arrow-right me-sm-1"></i><span class="d-none d-sm-inline">Sign Out</span></a>
             </div>
         </div>
     </nav>
 
-    <div class="container px-3 pb-5" style="max-width: 800px;" hx-ext="sse" sse-connect="/lists/events">
+    <div class="container px-3 pb-5" style="max-width: 800px;" hx-ext="sse" sse-connect="{{base_path}}/lists/events">
         <!-- Lists Container -->
-        <div id="lists-container" hx-get="/lists/content" hx-trigger="sse:list-updated" hx-swap="innerHTML">
+        <div id="lists-container" hx-get="{{base_path}}/lists/content" hx-trigger="sse:list-updated" hx-swap="innerHTML">
 {{/fragment}}
 
             {{#lists}}
@@ -63,7 +63,7 @@
                         <span class="text-muted d-block small mt-1">Owner: {{owner}}</span>
                     </div>
                     <div class="btn-group">
-                        <button hx-post="/lists/{{id}}/toggle_hidden" hx-target="#lists-container" hx-swap="innerHTML"
+                        <button hx-post="{{base_path}}/lists/{{id}}/toggle_hidden" hx-target="#lists-container" hx-swap="innerHTML"
                                 class="btn btn-sm btn-outline-secondary border-0"
                                 data-bs-toggle="tooltip" data-bs-placement="top"
                                 title="{{#show_hidden}}Hide completed items{{/show_hidden}}{{^show_hidden}}Show hidden completed items{{/show_hidden}}">
@@ -74,12 +74,12 @@
                             <i class="bi bi-eye-slash"></i>
                             {{/show_hidden}}
                         </button>
-                        <button hx-get="/lists/{{id}}/edit" hx-target="#modals-holder" 
+                        <button hx-get="{{base_path}}/lists/{{id}}/edit" hx-target="#modals-holder" 
                                 class="btn btn-sm btn-outline-secondary border-0"
                                 data-bs-toggle="tooltip" data-bs-placement="top" title="Rename List">
                             <i class="bi bi-pencil"></i>
                         </button>
-                        <button hx-get="/lists/{{id}}/delete" hx-target="#modals-holder" 
+                        <button hx-get="{{base_path}}/lists/{{id}}/delete" hx-target="#modals-holder" 
                                 class="btn btn-sm btn-outline-danger border-0"
                                 data-bs-toggle="tooltip" data-bs-placement="top" title="Delete List">
                             <i class="bi bi-trash"></i>
@@ -89,7 +89,7 @@
                 
                 <div class="card-body pt-0">
                     <!-- Add Item Form inside list -->
-                    <form hx-post="/lists/{{id}}/items" hx-target="#lists-container" hx-swap="innerHTML" class="mb-3">
+                    <form hx-post="{{base_path}}/lists/{{id}}/items" hx-target="#lists-container" hx-swap="innerHTML" class="mb-3">
                         <div class="input-group input-group-sm">
                             <input type="text" class="form-control" id="add-item-{{id}}" name="name" placeholder="Add new item..." required autocomplete="off" hx-preserve list="autosuggestions-list">
                             <button class="btn btn-primary" type="submit"><i class="bi bi-plus-lg"></i></button>
@@ -104,7 +104,7 @@
                                 <i class="bi bi-grip-vertical text-muted drag-handle me-1" style="cursor: grab; font-size: 1.1rem;"></i>
                                 <div class="form-check mb-0">
                                     <input class="form-check-input me-2" type="checkbox" id="item-chk-{{id}}" 
-                                           hx-post="/items/{{id}}/toggle" hx-target="#lists-container" hx-swap="innerHTML"
+                                           hx-post="{{base_path}}/items/{{id}}/toggle" hx-target="#lists-container" hx-swap="innerHTML"
                                            {{#is_done}}checked{{/is_done}}>
                                     <label class="form-check-label {{#is_done}}item-done{{/is_done}}" for="item-chk-{{id}}">
                                         {{name}}
@@ -112,8 +112,8 @@
                                 </div>
                             </div>
                             <div class="btn-group">
-                                <button hx-get="/items/{{id}}/edit" hx-target="#modals-holder" class="btn btn-sm btn-link text-secondary p-1"><i class="bi bi-pencil-square"></i></button>
-                                <button hx-delete="/items/{{id}}" hx-target="#lists-container" hx-swap="innerHTML" class="btn btn-sm btn-link text-danger p-1"><i class="bi bi-x-circle"></i></button>
+                                <button hx-get="{{base_path}}/items/{{id}}/edit" hx-target="#modals-holder" class="btn btn-sm btn-link text-secondary p-1"><i class="bi bi-pencil-square"></i></button>
+                                <button hx-delete="{{base_path}}/items/{{id}}" hx-target="#lists-container" hx-swap="innerHTML" class="btn btn-sm btn-link text-danger p-1"><i class="bi bi-x-circle"></i></button>
                             </div>
                         </li>
                         {{/items}}
@@ -144,7 +144,7 @@
                     <h5 class="modal-title fw-bold" id="newListModalLabel"><i class="bi bi-plus-circle-fill me-2 text-primary"></i>Create New List</h5>
                     <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                 </div>
-                <form hx-post="/lists" hx-target="#lists-container" hx-swap="innerHTML" hx-on::after-request="this.reset()">
+                <form hx-post="{{base_path}}/lists" hx-target="#lists-container" hx-swap="innerHTML" hx-on::after-request="this.reset()">
                     <div class="modal-body pb-0">
                         <div class="mb-3">
                             <label for="new-list-name" class="form-label fw-bold text-secondary">List Name</label>
@@ -219,7 +219,7 @@
                         const params = new URLSearchParams();
                         params.append('ids', itemIds);
                         
-                        fetch('/lists/' + listId + '/reorder', {
+                        fetch('{{base_path}}/lists/' + listId + '/reorder', {
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/x-www-form-urlencoded',

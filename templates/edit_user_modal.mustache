@@ -5,7 +5,7 @@
                 <h5 class="modal-title fw-bold" id="editUserModalLabel"><i class="bi bi-pencil-fill me-2 text-primary"></i>Edit User</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
-            <form action="/admin/users/{{id}}/edit" method="POST">
+            <form action="{{base_path}}/admin/users/{{id}}/edit" method="POST">
                 <div class="modal-body pb-0">
                     <div class="mb-3">
                         <label for="edit-username" class="form-label fw-bold text-secondary">Username</label>
