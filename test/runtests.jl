@@ -387,4 +387,35 @@ end
     
     # Reset config back to default empty prefix
     SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => ""))
+
+    # 4. Test Reset Link formatting with various ports and hosts
+    # Mocking admin request
+    token = "admin_reset_token"
+    SyncList.db_execute("DELETE FROM sessions;")
+    SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
+    SyncList.db_execute("UPDATE users SET role = 'admin' WHERE username = 'stefan';")
+    
+    # Port 8080 (should show port)
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("host" => "myhost.com", "port" => 8080, "base_path" => ""))
+    req = SyncList.HTTP.Request("POST", "/admin/users/create", ["Cookie" => "session_id=$(token)"], "username=testuser8080&role=user")
+    res = SyncList.internalrequest(req)
+    @test res.status == 303
+    loc = filter(h -> h.first == "Location", res.headers)[1].second
+    @test occursin("created_link=http%3A%2F%2Fmyhost.com%3A8080%2Freset-password", loc)
+    
+    # Port 80 (should omit port)
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("host" => "myhost.com", "port" => 80, "base_path" => ""))
+    req = SyncList.HTTP.Request("POST", "/admin/users/create", ["Cookie" => "session_id=$(token)"], "username=testuser80&role=user")
+    res = SyncList.internalrequest(req)
+    @test res.status == 303
+    loc = filter(h -> h.first == "Location", res.headers)[1].second
+    @test occursin("created_link=http%3A%2F%2Fmyhost.com%2Freset-password", loc)
+
+    # Port 443 (should omit port and default to https)
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("host" => "securehost.com", "port" => 443, "base_path" => ""))
+    req = SyncList.HTTP.Request("POST", "/admin/users/create", ["Cookie" => "session_id=$(token)"], "username=testuser443&role=user")
+    res = SyncList.internalrequest(req)
+    @test res.status == 303
+    loc = filter(h -> h.first == "Location", res.headers)[1].second
+    @test occursin("created_link=https%3A%2F%2Fsecurehost.com%2Freset-password", loc)
 end

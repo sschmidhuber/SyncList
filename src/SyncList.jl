@@ -1035,9 +1035,16 @@ end
     token = string(uuid4())
     db_execute("INSERT INTO password_resets (token, username) VALUES (?, ?);", (token, new_user))
     
-    host_header = HTTP.header(req, "Host", "localhost:8080")
-    proto = HTTP.header(req, "X-Forwarded-Proto", "http")
-    reset_link = "$proto://$host_header$bp/reset-password?token=$token"
+    if !isassigned(CONFIG)
+        load_config()
+    end
+    server_cfg = Base.get(CONFIG[], "server", Dict{String, Any}())
+    cfg_host = Base.get(server_cfg, "host", "localhost")
+    cfg_port = Base.get(server_cfg, "port", 8080)
+    host_part = (cfg_port == 80 || cfg_port == 443) ? cfg_host : "$cfg_host:$cfg_port"
+    
+    proto = HTTP.header(req, "X-Forwarded-Proto", cfg_port == 443 ? "https" : "http")
+    reset_link = "$proto://$host_part$bp/reset-password?token=$token"
     
     return HTTP.Response(303, ["Location" => bp * "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
 end
@@ -1186,9 +1193,16 @@ end
     db_execute("INSERT OR REPLACE INTO password_resets (token, username) VALUES (?, ?);", (token, target_username))
     
     bp = get_base_path()
-    host_header = HTTP.header(req, "Host", "localhost:8080")
-    proto = HTTP.header(req, "X-Forwarded-Proto", "http")
-    reset_link = "$proto://$host_header$bp/reset-password?token=$token"
+    if !isassigned(CONFIG)
+        load_config()
+    end
+    server_cfg = Base.get(CONFIG[], "server", Dict{String, Any}())
+    cfg_host = Base.get(server_cfg, "host", "localhost")
+    cfg_port = Base.get(server_cfg, "port", 8080)
+    host_part = (cfg_port == 80 || cfg_port == 443) ? cfg_host : "$cfg_host:$cfg_port"
+    
+    proto = HTTP.header(req, "X-Forwarded-Proto", cfg_port == 443 ? "https" : "http")
+    reset_link = "$proto://$host_part$bp/reset-password?token=$token"
     
     return HTTP.Response(303, ["Location" => bp * "/admin?created_link=$(HTTP.escapeuri(reset_link))"])
 end
