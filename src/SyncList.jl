@@ -81,6 +81,12 @@ end
 # Middleware to strip prefix
 function prefix_stripper_middleware(handler)
     return function(req::HTTP.Request)
+        # Normalize double slashes in the path portion of req.target
+        target_parts = split(req.target, '?', limit=2)
+        path_part = replace(target_parts[1], r"/+" => "/")
+        target = length(target_parts) > 1 ? path_part * "?" * target_parts[2] : path_part
+        req.target = target
+
         base_path = get_base_path()
         if !isempty(base_path) && startswith(req.target, base_path)
             new_target = req.target[nextind(req.target, length(base_path)):end]

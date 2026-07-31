@@ -418,4 +418,21 @@ end
     @test res.status == 303
     loc = filter(h -> h.first == "Location", res.headers)[1].second
     @test occursin("created_link=https%3A%2F%2Fsecurehost.com%2Freset-password", loc)
+
+    # 5. Test double slash normalization in prefix stripping middleware
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => "/synclist"))
+    stripped_handler = SyncList.prefix_stripper_middleware(identity)
+
+    # Test path with double slash at start
+    req_dbl1 = SyncList.HTTP.Request("GET", "//login")
+    @test stripped_handler(req_dbl1).target == "/login"
+
+    # Test path with double slash and base_path
+    req_dbl2 = SyncList.HTTP.Request("GET", "/synclist//lists/events")
+    @test stripped_handler(req_dbl2).target == "/lists/events"
+
+    # Test path with double slash but empty base path
+    SyncList.CONFIG[] = Dict{String, Any}("server" => Dict{String, Any}("base_path" => ""))
+    req_dbl3 = SyncList.HTTP.Request("GET", "//lists/events")
+    @test stripped_handler(req_dbl3).target == "/lists/events"
 end
