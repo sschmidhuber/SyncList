@@ -636,7 +636,20 @@ end
     if !isempty(name)
         if is_owner
             is_shared = Base.get(data, "is_shared", "0") == "1" ? 1 : 0
+            
+            # Retroactively add items if changing from private to shared
+            old_is_shared_row = db_query("SELECT is_shared FROM lists WHERE id = ?;", (list_id,))
+            was_shared = !isempty(old_is_shared_row) && old_is_shared_row[1]["is_shared"] == 1
+            
             db_execute("UPDATE lists SET name = ?, is_shared = ? WHERE id = ?;", (name, is_shared, list_id))
+            
+            if is_shared == 1 && !was_shared
+                # Add existing items of this list to autosuggestions
+                items = db_query("SELECT name FROM items WHERE list_id = ?;", (list_id,))
+                for item in items
+                    db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (item["name"],))
+                end
+            end
         else
             db_execute("UPDATE lists SET name = ? WHERE id = ?;", (name, list_id))
         end
@@ -703,7 +716,14 @@ end
         r = db_query("SELECT MAX(position) as m FROM items WHERE list_id = ?;", (list_id,))
         max_pos = isempty(r) || r[1]["m"] === nothing ? 0 : r[1]["m"]
         db_execute("INSERT INTO items (list_id, name, is_done, position) VALUES (?, ?, 0, ?);", (list_id, name, max_pos + 1))
-        db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (name,))
+        
+        # Check if list is shared before adding to autosuggestions
+        is_shared_row = db_query("SELECT is_shared FROM lists WHERE id = ?;", (list_id,))
+        is_shared = !isempty(is_shared_row) && is_shared_row[1]["is_shared"] == 1
+        if is_shared
+            db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", (name,))
+        end
+        
         notify_sse_clients()
     end
     

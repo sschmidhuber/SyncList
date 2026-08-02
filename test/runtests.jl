@@ -302,15 +302,8 @@ end
     # Make stefan an admin so he can access admin panel autosuggestion routes
     SyncList.db_execute("UPDATE users SET role = 'admin' WHERE username = 'stefan';")
 
-    # 1. Clean the autosuggestions and sessions tables, or just verify the default German grocery items are seeded
-    suggestions = SyncList.db_query("SELECT name FROM autosuggestions;")
-    @test length(suggestions) >= 20
-    @test any(s -> s["name"] == "Butter", suggestions)
-    @test any(s -> s["name"] == "Milch", suggestions)
-    @test any(s -> s["name"] == "Kaffee", suggestions)
-
-    # 2. Add a new item to a list and verify it automatically gets collected in autosuggestions
-    # Reset lists/items
+    # 1. Clean the autosuggestions, items, lists, and sessions tables to isolate testing
+    SyncList.db_execute("DELETE FROM autosuggestions;")
     SyncList.db_execute("DELETE FROM items;")
     SyncList.db_execute("DELETE FROM lists;")
     SyncList.db_execute("DELETE FROM sessions;")
@@ -318,32 +311,69 @@ end
     token = "test_autosuggest_token"
     SyncList.db_execute("INSERT INTO sessions (token, username) VALUES (?, ?);", (token, "stefan"))
 
-    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("My Grocery List", "stefan", 0))
+    # 2. Test that adding an item to a private list does NOT add it to autosuggestions
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Private List", "stefan", 0))
     lists = SyncList.get_lists_for_user("stefan")
-    list_id = lists[1]["id"]
+    private_list_id = lists[1]["id"]
 
-    # Insert an item "Milchreis"
-    req_item = SyncList.HTTP.Request("POST", "/lists/$(list_id)/items", ["Cookie" => "session_id=$(token)"], "name=Milchreis")
-    res_item = SyncList.internalrequest(req_item)
-    @test res_item.status == 200
+    req_private_item = SyncList.HTTP.Request("POST", "/lists/$(private_list_id)/items", ["Cookie" => "session_id=$(token)"], "name=SecretPrivateItem")
+    res_private_item = SyncList.internalrequest(req_private_item)
+    @test res_private_item.status == 200
 
-    # Verify "Milchreis" is now in autosuggestions (case-insensitive check works)
-    sug_exists = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'Milchreis';")
-    @test sug_exists[1]["count"] == 1
+    # Verify "SecretPrivateItem" is NOT in autosuggestions
+    sug_exists_private = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'SecretPrivateItem';")
+    @test sug_exists_private[1]["count"] == 0
 
-    # Insert a duplicate "milchreis" (different case) and verify it is NOT added as a duplicate
-    # (collated case-insensitively, so it ignores or overrides)
-    SyncList.db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", ("milchreis",))
-    sug_exists_lower = SyncList.db_query("SELECT name FROM autosuggestions WHERE name = 'Milchreis' OR name = 'milchreis';")
+    # 3. Test that adding an item to a shared list DOES add it to autosuggestions
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Shared List", "stefan", 1))
+    lists = SyncList.get_lists_for_user("stefan")
+    shared_list_id = filter(l -> l["name"] == "Shared List", lists)[1]["id"]
+
+    req_shared_item = SyncList.HTTP.Request("POST", "/lists/$(shared_list_id)/items", ["Cookie" => "session_id=$(token)"], "name=SharedMilchreis")
+    res_shared_item = SyncList.internalrequest(req_shared_item)
+    @test res_shared_item.status == 200
+
+    # Verify "SharedMilchreis" IS now in autosuggestions
+    sug_exists_shared = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'SharedMilchreis';")
+    @test sug_exists_shared[1]["count"] == 1
+
+    # Insert a duplicate "sharedmilchreis" (different case) and verify it is NOT added as a duplicate
+    SyncList.db_execute("INSERT OR IGNORE INTO autosuggestions (name) VALUES (?);", ("sharedmilchreis",))
+    sug_exists_lower = SyncList.db_query("SELECT name FROM autosuggestions WHERE name = 'SharedMilchreis' OR name = 'sharedmilchreis';")
     @test length(sug_exists_lower) == 1
 
-    # 3. Test Admin Panel Routes
+    # 4. Test retroactive addition when a list is edited to transition from private to shared
+    # Make sure we have a private list with an item "RetroactiveItem"
+    SyncList.db_execute("INSERT INTO lists (name, owner, is_shared) VALUES (?, ?, ?);", ("Retro List", "stefan", 0))
+    lists = SyncList.get_lists_for_user("stefan")
+    retro_list_id = filter(l -> l["name"] == "Retro List", lists)[1]["id"]
+    
+    req_retro_item = SyncList.HTTP.Request("POST", "/lists/$(retro_list_id)/items", ["Cookie" => "session_id=$(token)"], "name=RetroactiveItem")
+    res_retro_item = SyncList.internalrequest(req_retro_item)
+    @test res_retro_item.status == 200
+    
+    # Assert it is NOT in autosuggestions yet
+    sug_exists_retro = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'RetroactiveItem';")
+    @test sug_exists_retro[1]["count"] == 0
+    
+    # Edit the list to make it shared (is_shared=1)
+    edit_body = "name=Retro List&is_shared=1"
+    edit_req = SyncList.HTTP.Request("POST", "/lists/$(retro_list_id)/edit", ["Cookie" => "session_id=$(token)", "Content-Type" => "application/x-www-form-urlencoded"], edit_body)
+    edit_res = SyncList.internalrequest(edit_req)
+    @test edit_res.status == 200
+    
+    # Assert it IS now in autosuggestions retroactively
+    sug_exists_retro_after = SyncList.db_query("SELECT COUNT(*) as count FROM autosuggestions WHERE name = 'RetroactiveItem';")
+    @test sug_exists_retro_after[1]["count"] == 1
+
+    # 5. Test Admin Panel Routes
     # GET /admin should render the suggestions
     admin_req = SyncList.HTTP.Request("GET", "/admin", ["Cookie" => "session_id=$(token)"])
     admin_res = SyncList.internalrequest(admin_req)
     @test admin_res.status == 200
     admin_html = String(admin_res.body)
-    @test occursin("Milchreis", admin_html)
+    @test occursin("SharedMilchreis", admin_html)
+    @test occursin("RetroactiveItem", admin_html)
 
     # POST /admin/suggestions adds a new item
     add_req = SyncList.HTTP.Request("POST", "/admin/suggestions", ["Cookie" => "session_id=$(token)"], "name=Apfelsaft")
