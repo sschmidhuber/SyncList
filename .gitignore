@@ -5,6 +5,7 @@
 *.db
 .DS_Store
 .benchmarkci
+.vscode
 Manifest.toml
 benchmark/*.json
 coverage

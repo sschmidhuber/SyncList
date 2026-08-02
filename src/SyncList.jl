@@ -212,15 +212,6 @@ function init_db_and_users(db_path=nothing, users_path=nothing)
         );
         """)
 
-        # Seed default German groceries if empty
-        r = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM autosuggestions;") |> first
-        if r.count == 0
-            default_groceries = ["Butter", "Milch", "Kaffee", "Brot", "Eier", "Käse", "Äpfel", "Bananen", "Kartoffeln", "Zwiebeln", "Nudeln", "Reis", "Zucker", "Salz", "Wasser", "Bier", "Tomaten", "Joghurt", "Schokolade", "Fleisch"]
-            for item in default_groceries
-                SQLite.DBInterface.execute(db, "INSERT INTO autosuggestions (name) VALUES (?);", (item,))
-            end
-        end
-
         # Seed default admin user if empty
         r_users = SQLite.DBInterface.execute(db, "SELECT COUNT(*) as count FROM users;") |> first
         if r_users.count == 0
