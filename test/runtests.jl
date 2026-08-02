@@ -466,3 +466,40 @@ end
     req_dbl3 = SyncList.HTTP.Request("GET", "//lists/events")
     @test stripped_handler(req_dbl3).target == "/lists/events"
 end
+
+@testset "PWA Integration Routes" begin
+    # 1. Test GET /manifest.json
+    req_manifest = SyncList.HTTP.Request("GET", "/manifest.json")
+    res_manifest = SyncList.internalrequest(req_manifest)
+    @test res_manifest.status == 200
+    @test any(h -> h.first == "Content-Type" && occursin("application/manifest+json", h.second), res_manifest.headers)
+    body_manifest = String(res_manifest.body)
+    @test occursin("\"short_name\": \"SyncList\"", body_manifest)
+    @test occursin("\"display\": \"standalone\"", body_manifest)
+    @test occursin("\"scope\": \"/\"", body_manifest)
+
+    # 2. Test GET /sw.js
+    req_sw = SyncList.HTTP.Request("GET", "/sw.js")
+    res_sw = SyncList.internalrequest(req_sw)
+    @test res_sw.status == 200
+    @test any(h -> h.first == "Content-Type" && occursin("application/javascript", h.second), res_sw.headers)
+    body_sw = String(res_sw.body)
+    @test occursin("synclist-cache-v1", body_sw)
+
+    # 3. Test GET /icons/icon.svg
+    req_svg = SyncList.HTTP.Request("GET", "/icons/icon.svg")
+    res_svg = SyncList.internalrequest(req_svg)
+    @test res_svg.status == 200
+    @test any(h -> h.first == "Content-Type" && occursin("image/svg+xml", h.second), res_svg.headers)
+
+    # 4. Test GET /icons/icon-192.png
+    req_png = SyncList.HTTP.Request("GET", "/icons/icon-192.png")
+    res_png = SyncList.internalrequest(req_png)
+    @test res_png.status == 200
+    @test any(h -> h.first == "Content-Type" && occursin("image/png", h.second), res_png.headers)
+
+    # 5. Test directory traversal rejection
+    req_bad = SyncList.HTTP.Request("GET", "/icons/%2e%2e")
+    res_bad = SyncList.internalrequest(req_bad)
+    @test res_bad.status == 400
+end

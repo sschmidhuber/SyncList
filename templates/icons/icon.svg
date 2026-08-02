@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0d6efd"/>
+  <!-- Standard checkmark and lines resembling a checklist -->
+  <g fill="none" stroke="#ffffff" stroke-width="40" stroke-linecap="round" stroke-linejoin="round">
+    <!-- First checkmark and line -->
+    <path d="M120 180 L160 220 L260 120" />
+    <line x1="300" y1="180" x2="420" y2="180" />
+    
+    <!-- Second checkmark and line -->
+    <path d="M120 340 L160 380 L260 280" />
+    <line x1="300" y1="340" x2="420" y2="340" />
+  </g>
+</svg>

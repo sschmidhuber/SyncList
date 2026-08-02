@@ -4,6 +4,13 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>SyncList - Login</title>
+    <!-- PWA Meta Tags & Manifest -->
+    <link rel="manifest" href="{{base_path}}/manifest.json">
+    <meta name="theme-color" content="#0d6efd">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="SyncList">
+    <link rel="apple-touch-icon" href="{{base_path}}/icons/icon-192.png">
     <!-- Bootstrap CSS -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <!-- HTMX -->
@@ -59,5 +66,16 @@
             </form>
         </div>
     </div>
+
+    <!-- Register Service Worker -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', function() {
+                navigator.serviceWorker.register('{{base_path}}/sw.js')
+                    .then(function(reg) { console.log('Service Worker registered', reg); })
+                    .catch(function(err) { console.error('Service Worker registration failed', err); });
+            });
+        }
+    </script>
 </body>
 </html>

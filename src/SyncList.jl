@@ -431,6 +431,31 @@ end
 
 # Oxygen Routes Setup
 
+@get "/manifest.json" function(req::HTTP.Request)
+    html_content = render_mustache("manifest.mustache")
+    return HTTP.Response(200, ["Content-Type" => "application/manifest+json; charset=utf-8"], body=html_content)
+end
+
+@get "/sw.js" function(req::HTTP.Request)
+    html_content = render_mustache("sw.mustache")
+    return HTTP.Response(200, ["Content-Type" => "application/javascript; charset=utf-8"], body=html_content)
+end
+
+@get "/icons/{filename}" function(req::HTTP.Request, filename::String)
+    if occursin("..", filename) || occursin("/", filename) || occursin("\\", filename)
+        return HTTP.Response(400, "Invalid filename")
+    end
+    icon_path = joinpath(PROJECT_ROOT, "templates", "icons", filename)
+    if !isfile(icon_path)
+        return HTTP.Response(404, "Icon Not Found")
+    end
+    mime_type = "image/png"
+    if endswith(filename, ".svg")
+        mime_type = "image/svg+xml"
+    end
+    return HTTP.Response(200, ["Content-Type" => mime_type], body=read(icon_path))
+end
+
 @get "/" function(req::HTTP.Request)
     username = get_authenticated_user(req)
     if username === nothing
